@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: telegram-site-record-proxy
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: APPS_SCRIPT_WEB_APP_URL
+        sync: false
