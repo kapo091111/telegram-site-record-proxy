@@ -52,13 +52,19 @@ export class GoogleWorkspace {
         return created.data.id;
     }
     async uploadJpeg(input) {
+        return this.uploadFile({
+            ...input,
+            mimeType: 'image/jpeg'
+        });
+    }
+    async uploadFile(input) {
         const uploaded = await this.drive.files.create({
             requestBody: {
                 name: input.fileName,
                 parents: [input.folderId]
             },
             media: {
-                mimeType: 'image/jpeg',
+                mimeType: input.mimeType,
                 body: Readable.from(input.buffer)
             },
             fields: 'id, webViewLink',

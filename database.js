@@ -117,6 +117,16 @@ export class Database {
     async setSiteDriveFolder(siteId, folderId) {
         await this.pool.query('update sites set drive_folder_id = $2 where id = $1', [siteId, folderId]);
     }
+    async archiveSite(userId, siteId) {
+        const result = await this.pool.query(`
+        update sites
+        set archived_at = now()
+        where id = $1 and user_id = $2 and archived_at is null
+        returning id
+      `, [siteId, userId]);
+        await this.pool.query('update user_state set current_site_id = null, updated_at = now() where user_id = $1 and current_site_id = $2', [userId, siteId]);
+        return Boolean(result.rowCount);
+    }
     async nextPhotoSequence(siteId, date) {
         const result = await this.pool.query('select coalesce(max(sequence), 0) + 1 as next_sequence from photos where site_id = $1 and date = $2', [siteId, date]);
         return Number(result.rows[0].next_sequence);

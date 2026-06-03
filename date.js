@@ -27,6 +27,10 @@ export function dateFolderName(date) {
 export function photoFileName(date, sequence) {
     return `${compactDate(date)}${String(sequence).padStart(3, '0')}.jpg`;
 }
+export function mediaFileName(date, sequence, extension) {
+    const cleanExtension = extension.replace(/^\./, '').toLowerCase();
+    return `${compactDate(date)}${String(sequence).padStart(3, '0')}.${cleanExtension}`;
+}
 export function documentName(date, siteName) {
     return `${date} - ${siteName}`;
 }

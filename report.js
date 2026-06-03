@@ -3,12 +3,12 @@ export function buildReportText(input) {
     const lines = [
         `${input.date}　${input.siteName}`,
         '',
-        `相片：${input.photos.length} 張`,
+        `檔案：${input.photos.length} 個`,
         '',
-        '相片記錄'
+        '檔案記錄'
     ];
     if (input.photos.length === 0) {
-        lines.push('－ 今日未有相片記錄');
+        lines.push('－ 今日未有檔案記錄');
     }
     else {
         for (const photo of input.photos) {
