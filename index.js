@@ -10,8 +10,9 @@ async function main() {
     const db = new Database(config.databaseUrl);
     await db.migrate();
     const google = new GoogleWorkspace({
-        serviceAccountEmail: config.googleServiceAccountEmail,
-        privateKey: config.googlePrivateKey,
+        clientId: config.googleClientId,
+        clientSecret: config.googleClientSecret,
+        refreshToken: config.googleRefreshToken,
         rootFolderId: config.googleDriveRootFolderId
     });
     const sites = new SiteService(db, google);

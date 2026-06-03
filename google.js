@@ -1,4 +1,5 @@
 import { Readable } from 'node:stream';
+import { OAuth2Client } from 'google-auth-library';
 import { google } from 'googleapis';
 import { documentName } from './date.js';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
@@ -8,14 +9,8 @@ export class GoogleWorkspace {
     docs;
     rootFolderId;
     constructor(input) {
-        const auth = new google.auth.JWT({
-            email: input.serviceAccountEmail,
-            key: input.privateKey,
-            scopes: [
-                'https://www.googleapis.com/auth/drive',
-                'https://www.googleapis.com/auth/documents'
-            ]
-        });
+        const auth = new OAuth2Client(input.clientId, input.clientSecret);
+        auth.setCredentials({ refresh_token: input.refreshToken });
         this.drive = google.drive({ version: 'v3', auth });
         this.docs = google.docs({ version: 'v1', auth });
         this.rootFolderId = input.rootFolderId;

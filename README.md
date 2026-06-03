@@ -1,6 +1,6 @@
 # Telegram 工程現場記錄 Bot
 
-Render 直接版：Telegram webhook 由 Render 接收，Render 直接寫入 Google Drive、建立 Google Docs、並用 PostgreSQL 記錄項目、日期、相片序號及重複相片。
+Render 直接版：Telegram webhook 由 Render 接收，Render 直接用 Kenneth Google 帳戶寫入 Google Drive、建立 Google Docs、並用 PostgreSQL 記錄項目、日期、相片序號及重複相片。
 
 不使用 Apps Script，不使用 OpenAI。
 
@@ -40,19 +40,19 @@ ALLOWED_TELEGRAM_USER_IDS=956383250
 
 DATABASE_URL=
 
-GOOGLE_SERVICE_ACCOUNT_EMAIL=
-GOOGLE_PRIVATE_KEY=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REFRESH_TOKEN=
 GOOGLE_DRIVE_ROOT_FOLDER_ID=
 ```
 
-## Google 權限
+## Google OAuth 權限
 
-1. 在 Google Cloud 建立 service account。
+1. 在 Google Cloud 建立 OAuth Client。
 2. 啟用 Google Drive API 和 Google Docs API。
-3. 建立 service account key，取得 email 和 private key。
+3. 用 Kenneth Google 帳戶授權一次，取得 refresh token。
 4. 在 Google Drive 建立或選中 `工程現場記錄` 資料夾。
-5. 把該資料夾分享給 service account email，權限設為 Editor。
-6. 複製該資料夾 ID 到 `GOOGLE_DRIVE_ROOT_FOLDER_ID`。
+5. 複製該資料夾 ID 到 `GOOGLE_DRIVE_ROOT_FOLDER_ID`。
 
 ## 本機測試
 

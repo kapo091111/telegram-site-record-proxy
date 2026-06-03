@@ -20,8 +20,9 @@ export const config = {
         .map((id) => Number(id.trim()))
         .filter((id) => Number.isFinite(id)),
     databaseUrl: required('DATABASE_URL'),
-    googleServiceAccountEmail: required('GOOGLE_SERVICE_ACCOUNT_EMAIL'),
-    googlePrivateKey: required('GOOGLE_PRIVATE_KEY').replace(/\\n/g, '\n'),
+    googleClientId: required('GOOGLE_CLIENT_ID'),
+    googleClientSecret: required('GOOGLE_CLIENT_SECRET'),
+    googleRefreshToken: required('GOOGLE_REFRESH_TOKEN'),
     googleDriveRootFolderId: required('GOOGLE_DRIVE_ROOT_FOLDER_ID')
 };
 if (config.allowedTelegramUserIds.length === 0) {
