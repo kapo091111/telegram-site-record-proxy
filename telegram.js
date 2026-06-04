@@ -18,6 +18,7 @@ export function createTelegramBot(input) {
     bot.command('site', async (ctx) => {
         const name = commandText(ctx.message.text, '/site');
         if (!name) {
+            await syncSitesQuietly(input.sites, ownerUserId);
             await sendSiteButtons(ctx, input.db, ownerUserId);
             return;
         }
@@ -25,6 +26,7 @@ export function createTelegramBot(input) {
         await ctx.reply(`已切換到：${site.name}`);
     });
     bot.command('sites', async (ctx) => {
+        await syncSitesQuietly(input.sites, ownerUserId);
         await sendSiteButtons(ctx, input.db, ownerUserId, 50);
     });
     bot.command('sync_sites', async (ctx) => {
@@ -122,6 +124,7 @@ export function createTelegramBot(input) {
     });
     bot.action('menu:sites', async (ctx) => {
         await ctx.answerCbQuery();
+        await syncSitesQuietly(input.sites, ownerUserId);
         await sendSiteButtons(ctx, input.db, ownerUserId);
     });
     bot.action('menu:archive_site', async (ctx) => {
@@ -191,7 +194,7 @@ export function createTelegramBot(input) {
             `recordDate=${await currentRecordDate(input.db, ownerUserId)}`,
             `sites=${JSON.stringify((await input.db.listSites(ownerUserId, 50)).map((site) => site.name))}`,
             'backend=render',
-            'version=render-sheet-sites-20260605'
+            'version=render-auto-sync-sites-20260605'
         ].join('\n'));
     });
     bot.command('report_now', async (ctx) => {
@@ -329,6 +332,14 @@ async function uploadTelegramFile(ctx, input, file) {
     catch (error) {
         console.error(error);
         await ctx.reply(`已暫存：${fileName}\nSynology 暫時未連到，稍後會自動補傳。`);
+    }
+}
+async function syncSitesQuietly(sites, ownerUserId) {
+    try {
+        await sites.syncSitesFromSheet(ownerUserId);
+    }
+    catch (error) {
+        console.error(error);
     }
 }
 async function currentRecordDate(db, userId) {

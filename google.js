@@ -124,11 +124,7 @@ export class GoogleWorkspace {
         const rows = result.data.values || [];
         return rows
             .filter((row, index) => index > 0 || !looksLikeHeader(row))
-            .map((row) => ({
-            code: String(row[0] || '').trim(),
-            name: String(row[1] || '').trim(),
-            status: String(row[2] || '').trim()
-        }))
+            .map(rowToSheetSite)
             .filter((site) => site.code && site.name);
     }
     async appendSiteToSheet(input) {
@@ -190,6 +186,34 @@ function escapeDriveQuery(value) {
 function looksLikeHeader(row) {
     const first = String(row[0] || '').toLowerCase();
     const second = String(row[1] || '').toLowerCase();
-    return ['code', 'site_code', '工程編號', '編號'].includes(first) ||
+    return ['code', 'site_code', '工程編號', '編號', '地盤'].includes(first) ||
         ['name', 'site_name', '地盤名', '項目名'].includes(second);
+}
+function rowToSheetSite(row) {
+    const first = String(row[0] || '').trim();
+    const second = String(row[1] || '').trim();
+    const third = String(row[2] || '').trim();
+    if (second) {
+        return {
+            code: first,
+            name: second,
+            status: third
+        };
+    }
+    const parsed = parseCombinedSite(first);
+    return {
+        code: parsed.code,
+        name: parsed.name,
+        status: ''
+    };
+}
+function parseCombinedSite(value) {
+    const match = value.match(/^(d{4,})[_s-]*(.+)$/);
+    if (!match) {
+        return { code: '', name: value.trim() };
+    }
+    return {
+        code: match[1],
+        name: match[2].trim()
+    };
 }
