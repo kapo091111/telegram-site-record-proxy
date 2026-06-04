@@ -21,8 +21,8 @@ export function normaliseDate(input) {
     }
     return null;
 }
-export function dateFolderName(date) {
-    return compactDate(date);
+export function dateFolderName(date, remark = '') {
+    return `${compactDate(date)}${safeNameRemark(remark)}`;
 }
 export function photoFileName(date, sequence) {
     return `${compactDate(date)}${String(sequence).padStart(3, '0')}.jpg`;
@@ -45,4 +45,10 @@ function validDate(date) {
         String(parsed.getUTCDate()).padStart(2, '0')
     ].join('-');
     return rebuilt === date ? date : null;
+}
+function safeNameRemark(value) {
+    return value
+        .trim()
+        .replace(/[\\/:*?"<>|]/g, '_')
+        .replace(/\s+/g, '');
 }

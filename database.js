@@ -30,6 +30,7 @@ export class Database {
         user_id bigint primary key,
         current_site_id uuid references sites(id),
         record_date text,
+        file_remark text,
         updated_at timestamptz not null default now()
       );
 
@@ -40,6 +41,7 @@ export class Database {
         date text not null,
         sequence integer not null,
         file_name text not null,
+        folder_name text,
         telegram_file_unique_id text,
         drive_file_id text not null,
         drive_url text,
@@ -59,7 +61,9 @@ export class Database {
       );
 
       alter table user_state add column if not exists record_date text;
+      alter table user_state add column if not exists file_remark text;
       alter table sites add column if not exists site_code text;
+      alter table photos add column if not exists folder_name text;
       alter table photos add column if not exists telegram_file_unique_id text;
       alter table photos add column if not exists synology_status text not null default 'pending';
       alter table photos add column if not exists synology_path text;
@@ -68,6 +72,9 @@ export class Database {
       update photos
       set synology_status = 'pending'
       where synology_status is null;
+      update photos
+      set folder_name = replace(date, '-', '')
+      where folder_name is null;
       create unique index if not exists photos_telegram_file_unique_id_idx
         on photos (telegram_file_unique_id)
         where telegram_file_unique_id is not null;
@@ -133,6 +140,18 @@ export class Database {
     async currentRecordDate(userId) {
         const result = await this.pool.query('select record_date from user_state where user_id = $1', [userId]);
         return result.rows[0]?.record_date || null;
+    }
+    async setFileRemark(userId, remark) {
+        await this.pool.query(`
+        insert into user_state (user_id, file_remark, updated_at)
+        values ($1, $2, now())
+        on conflict (user_id)
+        do update set file_remark = excluded.file_remark, updated_at = now()
+      `, [userId, remark]);
+    }
+    async currentFileRemark(userId) {
+        const result = await this.pool.query('select file_remark from user_state where user_id = $1', [userId]);
+        return result.rows[0]?.file_remark || null;
     }
     async currentSite(userId) {
         const result = await this.pool.query(`
@@ -210,8 +229,8 @@ export class Database {
     }
     async insertPhoto(input) {
         const result = await this.pool.query(`
-        insert into photos (site_id, user_id, date, sequence, file_name, telegram_file_unique_id, drive_file_id, drive_url)
-        values ($1, $2, $3, $4, $5, $6, $7, $8)
+        insert into photos (site_id, user_id, date, sequence, file_name, folder_name, telegram_file_unique_id, drive_file_id, drive_url)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         returning *
       `, [
             input.siteId,
@@ -219,6 +238,7 @@ export class Database {
             input.date,
             input.sequence,
             input.fileName,
+            input.folderName,
             input.telegramFileUniqueId,
             input.driveFileId,
             input.driveUrl
@@ -369,6 +389,7 @@ function rowToPhoto(row) {
         date: row.date,
         sequence: Number(row.sequence),
         fileName: row.file_name,
+        folderName: row.folder_name || row.date.replace(/-/g, ''),
         telegramFileUniqueId: row.telegram_file_unique_id,
         driveFileId: row.drive_file_id,
         driveUrl: row.drive_url,

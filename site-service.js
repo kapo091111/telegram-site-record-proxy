@@ -29,9 +29,9 @@ export class SiteService {
     async currentSite(userId) {
         return this.db.currentSite(userId);
     }
-    async ensureDateFolder(site, date = hkDate()) {
+    async ensureDateFolder(site, date = hkDate(), remark = '') {
         await this.ensureSiteFolder(site);
-        return this.google.ensureFolder(dateFolderName(date), site.driveFolderId);
+        return this.google.ensureFolder(dateFolderName(date, remark), site.driveFolderId);
     }
     async syncSitesFromSheet(userId) {
         if (!this.sheetConfig) {

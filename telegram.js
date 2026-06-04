@@ -1,5 +1,5 @@
 import { Markup, Telegraf } from 'telegraf';
-import { hkDate, mediaFileName, normaliseDate } from './date.js';
+import { dateFolderName, hkDate, mediaFileName, normaliseDate } from './date.js';
 import { requireAllowedUser } from './auth.js';
 export function createTelegramBot(input) {
     const bot = new Telegraf(input.token);
@@ -34,7 +34,7 @@ export function createTelegramBot(input) {
         }
         catch (error) {
             console.error(error);
-            await ctx.reply('未能同步 Google Sheet。請檢查 GOOGLE_SITES_SHEET_ID 同分享權限。');
+            await ctx.reply(describeGoogleSheetError(error));
         }
     });
     bot.command('archive_site', async (ctx) => {
@@ -97,6 +97,15 @@ export function createTelegramBot(input) {
         await ctx.answerCbQuery(site.name);
         await ctx.editMessageText(`已刪除地盤：${site.name}`);
     });
+    bot.command('remark', async (ctx) => {
+        const remark = commandText(ctx.message.text, '/remark');
+        if (!remark) {
+            await sendRemarkButtons(ctx);
+            return;
+        }
+        await input.db.setFileRemark(ownerUserId, remark === '清除' ? null : remark);
+        await ctx.reply(remark === '清除' ? '已清除檔案備注。' : `檔案備注已設定：${remark}`);
+    });
     bot.command('date', async (ctx) => {
         const rawDate = commandText(ctx.message.text, '/date');
         if (!rawDate) {
@@ -127,6 +136,10 @@ export function createTelegramBot(input) {
         await ctx.answerCbQuery();
         await sendDeleteSiteButtons(ctx, input.db, ownerUserId);
     });
+    bot.action('menu:remark', async (ctx) => {
+        await ctx.answerCbQuery();
+        await sendRemarkButtons(ctx);
+    });
     bot.action('menu:date', async (ctx) => {
         await ctx.answerCbQuery();
         await sendDateButtons(ctx);
@@ -145,6 +158,13 @@ export function createTelegramBot(input) {
         }
         const report = await input.reports.createReportForSite(site, await currentRecordDate(input.db, ownerUserId));
         await ctx.reply(report.message);
+    });
+    bot.action(/^remark:(.+)$/, async (ctx) => {
+        const value = ctx.match[1];
+        const remark = value === 'clear' ? null : value;
+        await input.db.setFileRemark(ownerUserId, remark);
+        await ctx.answerCbQuery(remark || '清除');
+        await ctx.editMessageText(remark ? `檔案備注已設定：${remark}` : '已清除檔案備注。');
     });
     bot.action(/^date:(today|yesterday|before_yesterday)$/, async (ctx) => {
         const selected = ctx.match[1];
@@ -270,7 +290,9 @@ async function uploadTelegramFile(ctx, input, file) {
     }
     const date = await currentRecordDate(input.db, file.ownerUserId);
     await ctx.reply(`收到${file.label}，正在暫存到 Google Drive。`);
-    const dateFolderId = await input.sites.ensureDateFolder(site, date);
+    const remark = await input.db.currentFileRemark(file.ownerUserId);
+    const folderName = dateFolderName(date, remark || '');
+    const dateFolderId = await input.sites.ensureDateFolder(site, date, remark || '');
     const sequence = await input.db.nextPhotoSequence(site.id, date);
     const fileName = mediaFileName(date, sequence, file.extension);
     const fileUrl = await ctx.telegram.getFileLink(file.fileId);
@@ -290,10 +312,12 @@ async function uploadTelegramFile(ctx, input, file) {
         date,
         sequence,
         fileName,
+        folderName,
         telegramFileUniqueId: file.fileUniqueId,
         driveFileId: uploaded.id,
         driveUrl: uploaded.url
     });
+    await input.db.setFileRemark(file.ownerUserId, null);
     if (!input.sync) {
         await ctx.reply(`已暫存：${fileName}`);
         return;
@@ -352,6 +376,7 @@ async function setTelegramCommands(bot) {
         { command: 'completed_sites', description: '查看已完成地盤' },
         { command: 'delete_site', description: '刪除打錯的地盤' },
         { command: 'date', description: '設定記錄日期' },
+        { command: 'remark', description: '設定檔案備注' },
         { command: 'sync_today', description: '同步今日到 Synology' },
         { command: 'sync_pending', description: '補傳未同步檔案' },
         { command: 'debug', description: '顯示除錯資料' },
@@ -361,8 +386,21 @@ async function setTelegramCommands(bot) {
 async function sendMainMenu(ctx) {
     await ctx.reply('請選擇操作：', Markup.inlineKeyboard([
         [Markup.button.callback('選地盤', 'menu:sites'), Markup.button.callback('選日期', 'menu:date')],
+        [Markup.button.callback('檔案備注', 'menu:remark')],
         [Markup.button.callback('完成地盤', 'menu:archive_site'), Markup.button.callback('已完成地盤', 'menu:completed_sites')],
         [Markup.button.callback('刪除地盤', 'menu:delete_site')]
+    ]));
+}
+async function sendRemarkButtons(ctx) {
+    await ctx.reply('請選擇檔案備注：', Markup.inlineKeyboard([
+        [
+            Markup.button.callback('打拆', 'remark:打拆'),
+            Markup.button.callback('水電完成', 'remark:水電完成')
+        ],
+        [
+            Markup.button.callback('泥水完成', 'remark:泥水完成'),
+            Markup.button.callback('清除', 'remark:clear')
+        ]
     ]));
 }
 async function sendDateButtons(ctx) {
@@ -381,9 +419,11 @@ async function sendStatus(ctx, db, sites, ownerUserId) {
     const site = await sites.currentSite(ownerUserId);
     const date = await currentRecordDate(db, ownerUserId);
     const counts = site ? await db.syncCountsForDate(site.id, date) : { total: 0, synced: 0, pending: 0 };
+    const remark = await db.currentFileRemark(ownerUserId);
     await ctx.reply([
         `目前項目：${site?.name || '未選擇'}`,
         `記錄日期：${date}`,
+        `檔案備注：${remark || '無'}`,
         `檔案：${counts.total} 個`,
         `已同步：${counts.synced} 個`,
         `待補傳：${counts.pending} 個`
@@ -412,4 +452,18 @@ function addHongKongDays(days) {
     const hkNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Hong_Kong' }));
     hkNow.setDate(hkNow.getDate() + days);
     return hkNow;
+}
+function describeGoogleSheetError(error) {
+    const status = typeof error === 'object' && error !== null && 'status' in error ? error.status : null;
+    const message = error instanceof Error ? error.message : String(error);
+    if (status === 403 || message.includes('insufficient authentication scopes')) {
+        return 'Google Sheet 權限不足。多數係 OAuth refresh token 未包含 Google Sheets 權限，要重新授權。';
+    }
+    if (status === 404 || message.includes('Requested entity was not found')) {
+        return '搵唔到 Google Sheet。請檢查 GOOGLE_SITES_SHEET_ID 是否正確，並確認 Sheet 已分享給授權帳戶。';
+    }
+    if (message.includes('Unable to parse range') || message.includes('range')) {
+        return 'Google Sheet range 錯。請檢查 GOOGLE_SITES_SHEET_RANGE，例如 Sites!A:C。';
+    }
+    return `未能同步 Google Sheet：${message}`;
 }

@@ -39,11 +39,11 @@ export class SftpSyncService {
             readyTimeout: 30_000
         });
         try {
-            const dateDir = joinRemotePath(this.config.remoteRoot, safePathSegment(site.name), compactDate(date));
-            await ensureRemoteDirectory(sftp, dateDir);
             let uploaded = 0;
             const photos = await this.db.pendingPhotosForDate(site.id, date);
             for (const photo of photos) {
+                const dateDir = joinRemotePath(this.config.remoteRoot, safePathSegment(site.name), safePathSegment(photo.folderName || compactDate(date)));
+                await ensureRemoteDirectory(sftp, dateDir);
                 const remotePath = joinRemotePath(dateDir, safePathSegment(photo.fileName));
                 try {
                     const buffer = await this.google.downloadFile(photo.driveFileId);
@@ -63,6 +63,8 @@ export class SftpSyncService {
                 }
             }
             const reports = await this.db.reportsForDate(site.id, date);
+            const dateDir = joinRemotePath(this.config.remoteRoot, safePathSegment(site.name), compactDate(date));
+            await ensureRemoteDirectory(sftp, dateDir);
             for (const report of reports) {
                 const buffer = await this.google.exportDocumentPdf(report.driveDocumentId);
                 const fileName = `${documentName(date, site.name)}.pdf`;
