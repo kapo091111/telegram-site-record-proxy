@@ -208,7 +208,7 @@ function rowToSheetSite(row) {
     };
 }
 function parseCombinedSite(value) {
-    const match = value.match(/^(d{4,})[_s-]*(.+)$/);
+    const match = value.match(/^(\d{4,})[_\s-]*(.+)$/);
     if (!match) {
         return { code: '', name: value.trim() };
     }
