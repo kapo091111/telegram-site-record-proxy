@@ -210,7 +210,7 @@ export class Database {
         const result = await this.pool.query(`
         select *
         from photos
-        where site_id = $1 and date = $2 and synology_status <> 'synced'
+        where site_id = $1 and date = $2 and synology_status in ('pending', 'failed')
         order by sequence asc
       `, [siteId, date]);
         return result.rows.map(rowToPhoto);
@@ -220,7 +220,7 @@ export class Database {
         select
           count(*)::int as total,
           count(*) filter (where synology_status = 'synced')::int as synced,
-          count(*) filter (where synology_status <> 'synced')::int as pending
+          count(*) filter (where synology_status in ('pending', 'failed'))::int as pending
         from photos
         where site_id = $1 and date = $2
       `, [siteId, date]);
@@ -255,7 +255,7 @@ export class Database {
         select distinct s.*
         from sites s
         join photos p on p.site_id = s.id
-        where p.date = $1 and p.synology_status <> 'synced'
+        where p.date = $1 and p.synology_status in ('pending', 'failed')
         order by s.last_used_at desc
       `, [date]);
         return result.rows.map(rowToSite);
@@ -264,7 +264,7 @@ export class Database {
         const result = await this.pool.query(`
       select distinct date
       from photos
-      where synology_status <> 'synced'
+      where synology_status in ('pending', 'failed')
       order by date asc
     `);
         return result.rows.map((row) => row.date);
@@ -282,6 +282,13 @@ export class Database {
         await this.pool.query(`
         update photos
         set synology_status = 'failed'
+        where id = $1 and synology_status <> 'synced'
+      `, [photoId]);
+    }
+    async markPhotoMissing(photoId) {
+        await this.pool.query(`
+        update photos
+        set synology_status = 'missing'
         where id = $1 and synology_status <> 'synced'
       `, [photoId]);
     }

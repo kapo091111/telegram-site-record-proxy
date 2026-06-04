@@ -54,7 +54,12 @@ export class SftpSyncService {
                 }
                 catch (error) {
                     console.error(error);
-                    await this.db.markPhotoSyncFailed(photo.id);
+                    if (isGoogleNotFound(error)) {
+                        await this.db.markPhotoMissing(photo.id);
+                    }
+                    else {
+                        await this.db.markPhotoSyncFailed(photo.id);
+                    }
                 }
             }
             const reports = await this.db.reportsForDate(site.id, date);
@@ -103,4 +108,7 @@ function safePathSegment(value) {
         .trim()
         .replace(/[\\/:*?"<>|]/g, '_')
         .replace(/\s+/g, ' ');
+}
+function isGoogleNotFound(error) {
+    return typeof error === 'object' && error !== null && 'status' in error && error.status === 404;
 }
