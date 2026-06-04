@@ -59,6 +59,13 @@ export class Database {
 
       alter table user_state add column if not exists record_date text;
       alter table photos add column if not exists telegram_file_unique_id text;
+      alter table photos add column if not exists synology_status text not null default 'pending';
+      alter table photos add column if not exists synology_path text;
+      alter table photos add column if not exists synology_synced_at timestamptz;
+      alter table photos add column if not exists drive_deleted_at timestamptz;
+      update photos
+      set synology_status = 'pending'
+      where synology_status is null;
       create unique index if not exists photos_telegram_file_unique_id_idx
         on photos (telegram_file_unique_id)
         where telegram_file_unique_id is not null;
@@ -199,6 +206,30 @@ export class Database {
       `, [siteId, date]);
         return result.rows.map(rowToPhoto);
     }
+    async pendingPhotosForDate(siteId, date) {
+        const result = await this.pool.query(`
+        select *
+        from photos
+        where site_id = $1 and date = $2 and synology_status <> 'synced'
+        order by sequence asc
+      `, [siteId, date]);
+        return result.rows.map(rowToPhoto);
+    }
+    async syncCountsForDate(siteId, date) {
+        const result = await this.pool.query(`
+        select
+          count(*)::int as total,
+          count(*) filter (where synology_status = 'synced')::int as synced,
+          count(*) filter (where synology_status <> 'synced')::int as pending
+        from photos
+        where site_id = $1 and date = $2
+      `, [siteId, date]);
+        return {
+            total: Number(result.rows[0]?.total || 0),
+            synced: Number(result.rows[0]?.synced || 0),
+            pending: Number(result.rows[0]?.pending || 0)
+        };
+    }
     async sitesWithPhotosOnDate(date) {
         const result = await this.pool.query(`
         select distinct s.*
@@ -209,6 +240,58 @@ export class Database {
       `, [date]);
         return result.rows.map(rowToSite);
     }
+    async sitesWithFilesOnDate(date) {
+        const result = await this.pool.query(`
+        select distinct s.*
+        from sites s
+        join photos p on p.site_id = s.id
+        where p.date = $1
+        order by s.last_used_at desc
+      `, [date]);
+        return result.rows.map(rowToSite);
+    }
+    async sitesWithPendingFilesOnDate(date) {
+        const result = await this.pool.query(`
+        select distinct s.*
+        from sites s
+        join photos p on p.site_id = s.id
+        where p.date = $1 and p.synology_status <> 'synced'
+        order by s.last_used_at desc
+      `, [date]);
+        return result.rows.map(rowToSite);
+    }
+    async pendingDates() {
+        const result = await this.pool.query(`
+      select distinct date
+      from photos
+      where synology_status <> 'synced'
+      order by date asc
+    `);
+        return result.rows.map((row) => row.date);
+    }
+    async markPhotoSynced(photoId, synologyPath) {
+        await this.pool.query(`
+        update photos
+        set synology_status = 'synced',
+            synology_path = $2,
+            synology_synced_at = now()
+        where id = $1
+      `, [photoId, synologyPath]);
+    }
+    async markPhotoSyncFailed(photoId) {
+        await this.pool.query(`
+        update photos
+        set synology_status = 'failed'
+        where id = $1 and synology_status <> 'synced'
+      `, [photoId]);
+    }
+    async markPhotoDriveDeleted(photoId) {
+        await this.pool.query(`
+        update photos
+        set drive_deleted_at = now()
+        where id = $1
+      `, [photoId]);
+    }
     async upsertReport(input) {
         await this.pool.query(`
         insert into reports (site_id, user_id, date, drive_document_id, drive_url)
@@ -216,6 +299,15 @@ export class Database {
         on conflict (site_id, date)
         do update set drive_document_id = excluded.drive_document_id, drive_url = excluded.drive_url, created_at = now()
       `, [input.siteId, input.userId, input.date, input.driveDocumentId, input.driveUrl]);
+    }
+    async reportsForDate(siteId, date) {
+        const result = await this.pool.query(`
+        select *
+        from reports
+        where site_id = $1 and date = $2
+        order by created_at asc
+      `, [siteId, date]);
+        return result.rows.map(rowToReport);
     }
 }
 function rowToSite(row) {
@@ -239,6 +331,21 @@ function rowToPhoto(row) {
         fileName: row.file_name,
         telegramFileUniqueId: row.telegram_file_unique_id,
         driveFileId: row.drive_file_id,
+        driveUrl: row.drive_url,
+        synologyStatus: row.synology_status || 'pending',
+        synologyPath: row.synology_path,
+        synologySyncedAt: row.synology_synced_at,
+        driveDeletedAt: row.drive_deleted_at,
+        createdAt: row.created_at
+    };
+}
+function rowToReport(row) {
+    return {
+        id: row.id,
+        siteId: row.site_id,
+        userId: Number(row.user_id),
+        date: row.date,
+        driveDocumentId: row.drive_document_id,
         driveUrl: row.drive_url,
         createdAt: row.created_at
     };

@@ -1,14 +1,9 @@
 import { Markup, Telegraf } from 'telegraf';
 import { hkDate, mediaFileName, normaliseDate } from './date.js';
 import { requireAllowedUser } from './auth.js';
-const DOCUMENT_TYPES = {
-    'image/jpeg': { extension: 'jpg', label: '圖片' },
-    'image/png': { extension: 'png', label: '圖片' },
-    'image/webp': { extension: 'webp', label: '圖片' },
-    'application/pdf': { extension: 'pdf', label: 'PDF' }
-};
 export function createTelegramBot(input) {
     const bot = new Telegraf(input.token);
+    const ownerUserId = input.allowedUserIds[0];
     bot.command('whoami', async (ctx) => {
         await ctx.reply(`Telegram user ID：${ctx.from.id}`);
     });
@@ -23,51 +18,51 @@ export function createTelegramBot(input) {
     bot.command('site', async (ctx) => {
         const name = commandText(ctx.message.text, '/site');
         if (!name) {
-            await sendSiteButtons(ctx, input.db);
+            await sendSiteButtons(ctx, input.db, ownerUserId);
             return;
         }
-        const site = await input.sites.useSite(ctx.from.id, name);
+        const site = await input.sites.useSite(ownerUserId, name);
         await ctx.reply(`已切換到：${site.name}`);
     });
     bot.command('sites', async (ctx) => {
-        await sendSiteButtons(ctx, input.db, 50);
+        await sendSiteButtons(ctx, input.db, ownerUserId, 50);
     });
     bot.command('archive_site', async (ctx) => {
-        await sendArchiveSiteButtons(ctx, input.db);
+        await sendArchiveSiteButtons(ctx, input.db, ownerUserId);
     });
     bot.command('completed_sites', async (ctx) => {
-        await sendCompletedSiteButtons(ctx, input.db);
+        await sendCompletedSiteButtons(ctx, input.db, ownerUserId);
     });
     bot.command('delete_site', async (ctx) => {
-        await sendDeleteSiteButtons(ctx, input.db);
+        await sendDeleteSiteButtons(ctx, input.db, ownerUserId);
     });
     bot.action(/^site:(.+)$/, async (ctx) => {
         const siteId = ctx.match[1];
-        const sites = await input.db.listSites(ctx.from.id, 50);
+        const sites = await input.db.listSites(ownerUserId, 50);
         const site = sites.find((candidate) => candidate.id === siteId);
         if (!site) {
             await ctx.answerCbQuery('找不到項目');
             return;
         }
-        await input.db.setCurrentSite(ctx.from.id, site.id);
+        await input.db.setCurrentSite(ownerUserId, site.id);
         await ctx.answerCbQuery(site.name);
         await ctx.editMessageText(`已切換到：${site.name}`);
     });
     bot.action(/^archive_site:(.+)$/, async (ctx) => {
         const siteId = ctx.match[1];
-        const sites = await input.db.listSites(ctx.from.id, 50);
+        const sites = await input.db.listSites(ownerUserId, 50);
         const site = sites.find((candidate) => candidate.id === siteId);
         if (!site) {
             await ctx.answerCbQuery('找不到項目');
             return;
         }
-        await input.db.archiveSite(ctx.from.id, site.id);
+        await input.db.archiveSite(ownerUserId, site.id);
         await ctx.answerCbQuery(site.name);
         await ctx.editMessageText(`已完成並隱藏地盤：${site.name}`);
     });
     bot.action(/^restore_site:(.+)$/, async (ctx) => {
         const siteId = ctx.match[1];
-        const site = await input.db.restoreSite(ctx.from.id, siteId);
+        const site = await input.db.restoreSite(ownerUserId, siteId);
         if (!site) {
             await ctx.answerCbQuery('找不到項目');
             return;
@@ -77,13 +72,13 @@ export function createTelegramBot(input) {
     });
     bot.action(/^delete_site:(.+)$/, async (ctx) => {
         const siteId = ctx.match[1];
-        const sites = await input.db.listSites(ctx.from.id, 50);
+        const sites = await input.db.listSites(ownerUserId, 50);
         const site = sites.find((candidate) => candidate.id === siteId);
         if (!site) {
             await ctx.answerCbQuery('找不到項目');
             return;
         }
-        const result = await input.db.deleteSiteIfEmpty(ctx.from.id, site.id);
+        const result = await input.db.deleteSiteIfEmpty(ownerUserId, site.id);
         if (!result.deleted) {
             await ctx.answerCbQuery('不可刪除');
             await ctx.editMessageText(`不可刪除：${site.name}\n已有檔案 ${result.fileCount} 個、文件 ${result.reportCount} 份。\n如項目已完工，請用「完成地盤」隱藏。`);
@@ -103,24 +98,24 @@ export function createTelegramBot(input) {
             await ctx.reply('日期格式錯誤。請用 /date 20260603 或 /date 2026-06-03。');
             return;
         }
-        await input.db.setRecordDate(ctx.from.id, date);
+        await input.db.setRecordDate(ownerUserId, date);
         await ctx.reply(`記錄日期已設定：${date}`);
     });
     bot.action('menu:sites', async (ctx) => {
         await ctx.answerCbQuery();
-        await sendSiteButtons(ctx, input.db);
+        await sendSiteButtons(ctx, input.db, ownerUserId);
     });
     bot.action('menu:archive_site', async (ctx) => {
         await ctx.answerCbQuery();
-        await sendArchiveSiteButtons(ctx, input.db);
+        await sendArchiveSiteButtons(ctx, input.db, ownerUserId);
     });
     bot.action('menu:completed_sites', async (ctx) => {
         await ctx.answerCbQuery();
-        await sendCompletedSiteButtons(ctx, input.db);
+        await sendCompletedSiteButtons(ctx, input.db, ownerUserId);
     });
     bot.action('menu:delete_site', async (ctx) => {
         await ctx.answerCbQuery();
-        await sendDeleteSiteButtons(ctx, input.db);
+        await sendDeleteSiteButtons(ctx, input.db, ownerUserId);
     });
     bot.action('menu:date', async (ctx) => {
         await ctx.answerCbQuery();
@@ -128,24 +123,24 @@ export function createTelegramBot(input) {
     });
     bot.action('menu:status', async (ctx) => {
         await ctx.answerCbQuery();
-        await sendStatus(ctx, input.db, input.sites);
+        await sendStatus(ctx, input.db, input.sites, ownerUserId);
     });
     bot.action('menu:report', async (ctx) => {
         await ctx.answerCbQuery();
-        const site = await input.sites.currentSite(ctx.from.id);
+        const site = await input.sites.currentSite(ownerUserId);
         if (!site) {
             await ctx.reply('未選擇項目。請先選擇地盤。');
-            await sendSiteButtons(ctx, input.db);
+            await sendSiteButtons(ctx, input.db, ownerUserId);
             return;
         }
-        const report = await input.reports.createReportForSite(site, await currentRecordDate(input.db, ctx.from.id));
+        const report = await input.reports.createReportForSite(site, await currentRecordDate(input.db, ownerUserId));
         await ctx.reply(report.message);
     });
     bot.action(/^date:(today|yesterday|before_yesterday)$/, async (ctx) => {
         const selected = ctx.match[1];
         const offset = selected === 'today' ? 0 : selected === 'yesterday' ? -1 : -2;
         const date = hkDate(addHongKongDays(offset));
-        await input.db.setRecordDate(ctx.from.id, date);
+        await input.db.setRecordDate(ownerUserId, date);
         await ctx.answerCbQuery(date);
         await ctx.editMessageText(`記錄日期已設定：${date}`);
     });
@@ -154,28 +149,50 @@ export function createTelegramBot(input) {
         await ctx.editMessageText('請直接輸入自訂日期，例如：/date 20260603');
     });
     bot.command('status', async (ctx) => {
-        await sendStatus(ctx, input.db, input.sites);
+        await sendStatus(ctx, input.db, input.sites, ownerUserId);
     });
     bot.command('debug', async (ctx) => {
-        const site = await input.sites.currentSite(ctx.from.id);
+        const site = await input.sites.currentSite(ownerUserId);
         await ctx.reply([
             `userId=${ctx.from.id}`,
+            `ownerUserId=${ownerUserId}`,
             `allowed=${input.allowedUserIds.join(',')}`,
             `currentSite=${site?.name || ''}`,
-            `recordDate=${await currentRecordDate(input.db, ctx.from.id)}`,
-            `sites=${JSON.stringify((await input.db.listSites(ctx.from.id, 50)).map((site) => site.name))}`,
+            `recordDate=${await currentRecordDate(input.db, ownerUserId)}`,
+            `sites=${JSON.stringify((await input.db.listSites(ownerUserId, 50)).map((site) => site.name))}`,
             'backend=render',
-            'version=render-completed-sites-20260604'
+            'version=render-shared-owner-20260605'
         ].join('\n'));
     });
     bot.command('report_now', async (ctx) => {
-        const site = await input.sites.currentSite(ctx.from.id);
+        const site = await input.sites.currentSite(ownerUserId);
         if (!site) {
             await ctx.reply('未選擇項目。請先輸入 /site 項目名。');
             return;
         }
-        const report = await input.reports.createReportForSite(site, await currentRecordDate(input.db, ctx.from.id));
+        const report = await input.reports.createReportForSite(site, await currentRecordDate(input.db, ownerUserId));
         await ctx.reply(report.message);
+    });
+    bot.command('sync_today', async (ctx) => {
+        if (!input.sync) {
+            await ctx.reply('未設定 Synology 同步。請先在 Render 加 SFTP 環境變數。');
+            return;
+        }
+        const date = await currentRecordDate(input.db, ownerUserId);
+        await ctx.reply(`開始同步 ${date} 到 Synology。`);
+        const result = await input.sync.syncDate(date);
+        const uploaded = result.reduce((sum, item) => sum + item.uploaded, 0);
+        await ctx.reply(`已同步到 Synology：${result.length} 個地盤，${uploaded} 個檔案。`);
+    });
+    bot.command('sync_pending', async (ctx) => {
+        if (!input.sync) {
+            await ctx.reply('未設定 Synology 同步。請先在 Render 加 SFTP 環境變數。');
+            return;
+        }
+        await ctx.reply('開始補傳所有未同步檔案到 Synology。');
+        const result = await input.sync.syncPendingDates();
+        const uploaded = result.reduce((sum, item) => sum + item.uploaded, 0);
+        await ctx.reply(`已補傳到 Synology：${result.length} 個地盤日期，${uploaded} 個檔案。`);
     });
     bot.on('photo', async (ctx) => {
         const photo = ctx.message.photo.at(-1);
@@ -184,6 +201,7 @@ export function createTelegramBot(input) {
             return;
         }
         await uploadTelegramFile(ctx, input, {
+            ownerUserId,
             fileId: photo.file_id,
             fileUniqueId: photo.file_unique_id,
             mimeType: 'image/jpeg',
@@ -193,22 +211,19 @@ export function createTelegramBot(input) {
     });
     bot.on('document', async (ctx) => {
         const document = ctx.message.document;
-        const type = document.mime_type ? DOCUMENT_TYPES[document.mime_type] : null;
-        if (!type) {
-            await ctx.reply('暫時只支援圖片檔案、PDF、影片。');
-            return;
-        }
         await uploadTelegramFile(ctx, input, {
+            ownerUserId,
             fileId: document.file_id,
             fileUniqueId: document.file_unique_id,
             mimeType: document.mime_type || 'application/octet-stream',
-            extension: extensionFromName(document.file_name) || type.extension,
-            label: type.label
+            extension: extensionFromName(document.file_name) || extensionFromMime(document.mime_type) || 'bin',
+            label: '檔案'
         });
     });
     bot.on('video', async (ctx) => {
         const video = ctx.message.video;
         await uploadTelegramFile(ctx, input, {
+            ownerUserId,
             fileId: video.file_id,
             fileUniqueId: video.file_unique_id,
             mimeType: video.mime_type || 'video/mp4',
@@ -233,7 +248,7 @@ export async function configureWebhook(input) {
     await setTelegramCommands(input.bot);
 }
 async function uploadTelegramFile(ctx, input, file) {
-    const site = await input.sites.currentSite(ctx.from.id);
+    const site = await input.sites.currentSite(file.ownerUserId);
     if (!site) {
         await ctx.reply('未選擇項目。請先輸入 /site 項目名。');
         return;
@@ -243,8 +258,8 @@ async function uploadTelegramFile(ctx, input, file) {
         await ctx.reply(`這個檔案已上傳過：${existing.fileName}`);
         return;
     }
-    const date = await currentRecordDate(input.db, ctx.from.id);
-    await ctx.reply(`收到${file.label}，正在上傳到 Google Drive。`);
+    const date = await currentRecordDate(input.db, file.ownerUserId);
+    await ctx.reply(`收到${file.label}，正在暫存到 Google Drive。`);
     const dateFolderId = await input.sites.ensureDateFolder(site, date);
     const sequence = await input.db.nextPhotoSequence(site.id, date);
     const fileName = mediaFileName(date, sequence, file.extension);
@@ -261,7 +276,7 @@ async function uploadTelegramFile(ctx, input, file) {
     });
     await input.db.insertPhoto({
         siteId: site.id,
-        userId: ctx.from.id,
+        userId: file.ownerUserId,
         date,
         sequence,
         fileName,
@@ -269,37 +284,48 @@ async function uploadTelegramFile(ctx, input, file) {
         driveFileId: uploaded.id,
         driveUrl: uploaded.url
     });
-    await ctx.reply(`已上傳：${fileName}`);
+    if (!input.sync) {
+        await ctx.reply(`已暫存：${fileName}`);
+        return;
+    }
+    try {
+        await input.sync.syncDate(date);
+        await ctx.reply(`已上傳到 Synology：${fileName}`);
+    }
+    catch (error) {
+        console.error(error);
+        await ctx.reply(`已暫存：${fileName}\nSynology 暫時未連到，稍後會自動補傳。`);
+    }
 }
 async function currentRecordDate(db, userId) {
     return (await db.currentRecordDate(userId)) || hkDate();
 }
-async function sendSiteButtons(ctx, db, limit = 10) {
-    const sites = await db.listSites(ctx.from.id, limit);
+async function sendSiteButtons(ctx, db, ownerUserId, limit = 10) {
+    const sites = await db.listSites(ownerUserId, limit);
     if (sites.length === 0) {
         await ctx.reply('未有項目。請輸入 /site 項目名。');
         return;
     }
     await ctx.reply('請選擇項目：', Markup.inlineKeyboard(sites.map((site) => Markup.button.callback(site.name, `site:${site.id}`)), { columns: 1 }));
 }
-async function sendArchiveSiteButtons(ctx, db) {
-    const sites = await db.listSites(ctx.from.id, 50);
+async function sendArchiveSiteButtons(ctx, db, ownerUserId) {
+    const sites = await db.listSites(ownerUserId, 50);
     if (sites.length === 0) {
         await ctx.reply('未有可完成的地盤。');
         return;
     }
     await ctx.reply('選擇要完成並隱藏的地盤：', Markup.inlineKeyboard(sites.map((site) => Markup.button.callback(site.name, `archive_site:${site.id}`)), { columns: 1 }));
 }
-async function sendCompletedSiteButtons(ctx, db) {
-    const sites = await db.listArchivedSites(ctx.from.id, 50);
+async function sendCompletedSiteButtons(ctx, db, ownerUserId) {
+    const sites = await db.listArchivedSites(ownerUserId, 50);
     if (sites.length === 0) {
         await ctx.reply('未有已完成地盤。');
         return;
     }
     await ctx.reply('已完成地盤：\n點選後會恢復並切換到該地盤，可以繼續上傳相片或文件。', Markup.inlineKeyboard(sites.map((site) => Markup.button.callback(site.name, `restore_site:${site.id}`)), { columns: 1 }));
 }
-async function sendDeleteSiteButtons(ctx, db) {
-    const sites = await db.listSites(ctx.from.id, 50);
+async function sendDeleteSiteButtons(ctx, db, ownerUserId) {
+    const sites = await db.listSites(ownerUserId, 50);
     if (sites.length === 0) {
         await ctx.reply('未有可刪除的地盤。');
         return;
@@ -315,6 +341,8 @@ async function setTelegramCommands(bot) {
         { command: 'completed_sites', description: '查看已完成地盤' },
         { command: 'delete_site', description: '刪除打錯的地盤' },
         { command: 'date', description: '設定記錄日期' },
+        { command: 'sync_today', description: '同步今日到 Synology' },
+        { command: 'sync_pending', description: '補傳未同步檔案' },
         { command: 'debug', description: '顯示除錯資料' },
         { command: 'whoami', description: '顯示 Telegram user ID' }
     ]);
@@ -338,14 +366,16 @@ async function sendDateButtons(ctx) {
         ]
     ]));
 }
-async function sendStatus(ctx, db, sites) {
-    const site = await sites.currentSite(ctx.from.id);
-    const date = await currentRecordDate(db, ctx.from.id);
-    const files = site ? await db.photosForDate(site.id, date) : [];
+async function sendStatus(ctx, db, sites, ownerUserId) {
+    const site = await sites.currentSite(ownerUserId);
+    const date = await currentRecordDate(db, ownerUserId);
+    const counts = site ? await db.syncCountsForDate(site.id, date) : { total: 0, synced: 0, pending: 0 };
     await ctx.reply([
         `目前項目：${site?.name || '未選擇'}`,
         `記錄日期：${date}`,
-        `檔案：${files.length} 個`
+        `檔案：${counts.total} 個`,
+        `已同步：${counts.synced} 個`,
+        `待補傳：${counts.pending} 個`
     ].join('\n'));
 }
 function commandText(text, command) {

@@ -78,6 +78,20 @@ export class GoogleWorkspace {
             url: uploaded.data.webViewLink || null
         };
     }
+    async downloadFile(fileId) {
+        const response = await this.drive.files.get({ fileId, alt: 'media', supportsAllDrives: true }, { responseType: 'arraybuffer' });
+        return Buffer.from(response.data);
+    }
+    async deleteFile(fileId) {
+        await this.drive.files.delete({
+            fileId,
+            supportsAllDrives: true
+        });
+    }
+    async exportDocumentPdf(documentId) {
+        const response = await this.drive.files.export({ fileId: documentId, mimeType: 'application/pdf' }, { responseType: 'arraybuffer' });
+        return Buffer.from(response.data);
+    }
     async createDocument(input) {
         const name = documentName(input.date, input.siteName);
         const existing = await this.findFile(name, input.folderId, DOC_MIME);
