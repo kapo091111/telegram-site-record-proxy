@@ -35,6 +35,12 @@ export function createTelegramBot(input) {
     bot.command('archive_site', async (ctx) => {
         await sendArchiveSiteButtons(ctx, input.db);
     });
+    bot.command('completed_sites', async (ctx) => {
+        await sendCompletedSiteButtons(ctx, input.db);
+    });
+    bot.command('delete_site', async (ctx) => {
+        await sendDeleteSiteButtons(ctx, input.db);
+    });
     bot.action(/^site:(.+)$/, async (ctx) => {
         const siteId = ctx.match[1];
         const sites = await input.db.listSites(ctx.from.id, 50);
@@ -59,6 +65,33 @@ export function createTelegramBot(input) {
         await ctx.answerCbQuery(site.name);
         await ctx.editMessageText(`已完成並隱藏地盤：${site.name}`);
     });
+    bot.action(/^restore_site:(.+)$/, async (ctx) => {
+        const siteId = ctx.match[1];
+        const site = await input.db.restoreSite(ctx.from.id, siteId);
+        if (!site) {
+            await ctx.answerCbQuery('找不到項目');
+            return;
+        }
+        await ctx.answerCbQuery(site.name);
+        await ctx.editMessageText(`已恢復並切換到：${site.name}`);
+    });
+    bot.action(/^delete_site:(.+)$/, async (ctx) => {
+        const siteId = ctx.match[1];
+        const sites = await input.db.listSites(ctx.from.id, 50);
+        const site = sites.find((candidate) => candidate.id === siteId);
+        if (!site) {
+            await ctx.answerCbQuery('找不到項目');
+            return;
+        }
+        const result = await input.db.deleteSiteIfEmpty(ctx.from.id, site.id);
+        if (!result.deleted) {
+            await ctx.answerCbQuery('不可刪除');
+            await ctx.editMessageText(`不可刪除：${site.name}\n已有檔案 ${result.fileCount} 個、文件 ${result.reportCount} 份。\n如項目已完工，請用「完成地盤」隱藏。`);
+            return;
+        }
+        await ctx.answerCbQuery(site.name);
+        await ctx.editMessageText(`已刪除地盤：${site.name}`);
+    });
     bot.command('date', async (ctx) => {
         const rawDate = commandText(ctx.message.text, '/date');
         if (!rawDate) {
@@ -80,6 +113,14 @@ export function createTelegramBot(input) {
     bot.action('menu:archive_site', async (ctx) => {
         await ctx.answerCbQuery();
         await sendArchiveSiteButtons(ctx, input.db);
+    });
+    bot.action('menu:completed_sites', async (ctx) => {
+        await ctx.answerCbQuery();
+        await sendCompletedSiteButtons(ctx, input.db);
+    });
+    bot.action('menu:delete_site', async (ctx) => {
+        await ctx.answerCbQuery();
+        await sendDeleteSiteButtons(ctx, input.db);
     });
     bot.action('menu:date', async (ctx) => {
         await ctx.answerCbQuery();
@@ -108,6 +149,10 @@ export function createTelegramBot(input) {
         await ctx.answerCbQuery(date);
         await ctx.editMessageText(`記錄日期已設定：${date}`);
     });
+    bot.action('date:custom', async (ctx) => {
+        await ctx.answerCbQuery();
+        await ctx.editMessageText('請直接輸入自訂日期，例如：/date 20260603');
+    });
     bot.command('status', async (ctx) => {
         await sendStatus(ctx, input.db, input.sites);
     });
@@ -120,7 +165,7 @@ export function createTelegramBot(input) {
             `recordDate=${await currentRecordDate(input.db, ctx.from.id)}`,
             `sites=${JSON.stringify((await input.db.listSites(ctx.from.id, 50)).map((site) => site.name))}`,
             'backend=render',
-            'version=render-direct-media-20260603'
+            'version=render-completed-sites-20260604'
         ].join('\n'));
     });
     bot.command('report_now', async (ctx) => {
@@ -245,15 +290,31 @@ async function sendArchiveSiteButtons(ctx, db) {
     }
     await ctx.reply('選擇要完成並隱藏的地盤：', Markup.inlineKeyboard(sites.map((site) => Markup.button.callback(site.name, `archive_site:${site.id}`)), { columns: 1 }));
 }
+async function sendCompletedSiteButtons(ctx, db) {
+    const sites = await db.listArchivedSites(ctx.from.id, 50);
+    if (sites.length === 0) {
+        await ctx.reply('未有已完成地盤。');
+        return;
+    }
+    await ctx.reply('已完成地盤：\n點選後會恢復並切換到該地盤，可以繼續上傳相片或文件。', Markup.inlineKeyboard(sites.map((site) => Markup.button.callback(site.name, `restore_site:${site.id}`)), { columns: 1 }));
+}
+async function sendDeleteSiteButtons(ctx, db) {
+    const sites = await db.listSites(ctx.from.id, 50);
+    if (sites.length === 0) {
+        await ctx.reply('未有可刪除的地盤。');
+        return;
+    }
+    await ctx.reply('選擇要刪除的地盤：\n只可刪除未有檔案或文件的地盤。', Markup.inlineKeyboard(sites.map((site) => Markup.button.callback(site.name, `delete_site:${site.id}`)), { columns: 1 }));
+}
 async function setTelegramCommands(bot) {
     await bot.telegram.setMyCommands([
         { command: 'menu', description: '開啟主選單' },
         { command: 'site', description: '新增或選擇項目' },
         { command: 'sites', description: '顯示全部項目' },
         { command: 'archive_site', description: '完成並隱藏地盤' },
+        { command: 'completed_sites', description: '查看已完成地盤' },
+        { command: 'delete_site', description: '刪除打錯的地盤' },
         { command: 'date', description: '設定記錄日期' },
-        { command: 'status', description: '顯示目前狀態' },
-        { command: 'report_now', description: '即時生成文件' },
         { command: 'debug', description: '顯示除錯資料' },
         { command: 'whoami', description: '顯示 Telegram user ID' }
     ]);
@@ -261,8 +322,8 @@ async function setTelegramCommands(bot) {
 async function sendMainMenu(ctx) {
     await ctx.reply('請選擇操作：', Markup.inlineKeyboard([
         [Markup.button.callback('選地盤', 'menu:sites'), Markup.button.callback('選日期', 'menu:date')],
-        [Markup.button.callback('今日狀態', 'menu:status'), Markup.button.callback('生成文件', 'menu:report')],
-        [Markup.button.callback('完成地盤', 'menu:archive_site')]
+        [Markup.button.callback('完成地盤', 'menu:archive_site'), Markup.button.callback('已完成地盤', 'menu:completed_sites')],
+        [Markup.button.callback('刪除地盤', 'menu:delete_site')]
     ]));
 }
 async function sendDateButtons(ctx) {
@@ -271,6 +332,9 @@ async function sendDateButtons(ctx) {
             Markup.button.callback('今日', 'date:today'),
             Markup.button.callback('昨日', 'date:yesterday'),
             Markup.button.callback('前日', 'date:before_yesterday')
+        ],
+        [
+            Markup.button.callback('自訂日期', 'date:custom')
         ]
     ]));
 }

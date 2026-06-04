@@ -114,6 +114,16 @@ export class Database {
       `, [userId, limit]);
         return result.rows.map(rowToSite);
     }
+    async listArchivedSites(userId, limit = 50) {
+        const result = await this.pool.query(`
+        select *
+        from sites
+        where user_id = $1 and archived_at is not null
+        order by archived_at desc, last_used_at desc
+        limit $2
+      `, [userId, limit]);
+        return result.rows.map(rowToSite);
+    }
     async setSiteDriveFolder(siteId, folderId) {
         await this.pool.query('update sites set drive_folder_id = $2 where id = $1', [siteId, folderId]);
     }
@@ -126,6 +136,34 @@ export class Database {
       `, [siteId, userId]);
         await this.pool.query('update user_state set current_site_id = null, updated_at = now() where user_id = $1 and current_site_id = $2', [userId, siteId]);
         return Boolean(result.rowCount);
+    }
+    async restoreSite(userId, siteId) {
+        const result = await this.pool.query(`
+        update sites
+        set archived_at = null, last_used_at = now()
+        where id = $1 and user_id = $2
+        returning *
+      `, [siteId, userId]);
+        if (!result.rows[0]) {
+            return null;
+        }
+        await this.setCurrentSite(userId, siteId);
+        return rowToSite(result.rows[0]);
+    }
+    async deleteSiteIfEmpty(userId, siteId) {
+        const counts = await this.pool.query(`
+        select
+          (select count(*)::int from photos where site_id = $1) as file_count,
+          (select count(*)::int from reports where site_id = $1) as report_count
+      `, [siteId]);
+        const fileCount = Number(counts.rows[0]?.file_count || 0);
+        const reportCount = Number(counts.rows[0]?.report_count || 0);
+        if (fileCount > 0 || reportCount > 0) {
+            return { deleted: false, fileCount, reportCount };
+        }
+        await this.pool.query('update user_state set current_site_id = null, updated_at = now() where user_id = $1 and current_site_id = $2', [userId, siteId]);
+        const result = await this.pool.query('delete from sites where id = $1 and user_id = $2 returning id', [siteId, userId]);
+        return { deleted: Boolean(result.rowCount), fileCount, reportCount };
     }
     async nextPhotoSequence(siteId, date) {
         const result = await this.pool.query('select coalesce(max(sequence), 0) + 1 as next_sequence from photos where site_id = $1 and date = $2', [siteId, date]);
