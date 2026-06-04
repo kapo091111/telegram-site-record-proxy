@@ -16,7 +16,6 @@ export function scheduleDailyReports(input) {
             }
         }
     }, {
-        scheduled: true,
         timezone: input.timezone
     });
 }
