@@ -13,6 +13,7 @@ const sftpHost = optional('SFTP_HOST');
 const sftpUsername = optional('SFTP_USERNAME');
 const sftpPassword = optional('SFTP_PASSWORD');
 const sftpRemoteRoot = optional('SFTP_REMOTE_ROOT');
+const googleSitesSheetId = optional('GOOGLE_SITES_SHEET_ID');
 export const config = {
     port: Number(optional('PORT', '3000')),
     publicUrl: required('PUBLIC_URL').replace(/\/$/, ''),
@@ -28,6 +29,12 @@ export const config = {
     googleClientSecret: required('GOOGLE_CLIENT_SECRET'),
     googleRefreshToken: required('GOOGLE_REFRESH_TOKEN'),
     googleDriveRootFolderId: required('GOOGLE_DRIVE_ROOT_FOLDER_ID'),
+    googleSitesSheet: googleSitesSheetId
+        ? {
+            spreadsheetId: googleSitesSheetId,
+            range: optional('GOOGLE_SITES_SHEET_RANGE', 'Sites!A:C')
+        }
+        : null,
     sftp: sftpHost && sftpUsername && sftpPassword && sftpRemoteRoot
         ? {
             host: sftpHost,

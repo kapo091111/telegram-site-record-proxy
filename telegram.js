@@ -27,6 +27,16 @@ export function createTelegramBot(input) {
     bot.command('sites', async (ctx) => {
         await sendSiteButtons(ctx, input.db, ownerUserId, 50);
     });
+    bot.command('sync_sites', async (ctx) => {
+        try {
+            const result = await input.sites.syncSitesFromSheet(ownerUserId);
+            await ctx.reply(`已同步 Google Sheet 地盤清單：${result.active} 個使用中，${result.archived} 個已完成。`);
+        }
+        catch (error) {
+            console.error(error);
+            await ctx.reply('未能同步 Google Sheet。請檢查 GOOGLE_SITES_SHEET_ID 同分享權限。');
+        }
+    });
     bot.command('archive_site', async (ctx) => {
         await sendArchiveSiteButtons(ctx, input.db, ownerUserId);
     });
@@ -161,7 +171,7 @@ export function createTelegramBot(input) {
             `recordDate=${await currentRecordDate(input.db, ownerUserId)}`,
             `sites=${JSON.stringify((await input.db.listSites(ownerUserId, 50)).map((site) => site.name))}`,
             'backend=render',
-            'version=render-shared-owner-20260605'
+            'version=render-sheet-sites-20260605'
         ].join('\n'));
     });
     bot.command('report_now', async (ctx) => {
@@ -337,6 +347,7 @@ async function setTelegramCommands(bot) {
         { command: 'menu', description: '開啟主選單' },
         { command: 'site', description: '新增或選擇項目' },
         { command: 'sites', description: '顯示全部項目' },
+        { command: 'sync_sites', description: '同步 Google Sheet 地盤清單' },
         { command: 'archive_site', description: '完成並隱藏地盤' },
         { command: 'completed_sites', description: '查看已完成地盤' },
         { command: 'delete_site', description: '刪除打錯的地盤' },

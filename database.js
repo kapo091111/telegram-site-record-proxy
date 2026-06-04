@@ -17,6 +17,7 @@ export class Database {
       create table if not exists sites (
         id uuid primary key default gen_random_uuid(),
         user_id bigint not null,
+        site_code text,
         name text not null,
         drive_folder_id text,
         archived_at timestamptz,
@@ -58,6 +59,7 @@ export class Database {
       );
 
       alter table user_state add column if not exists record_date text;
+      alter table sites add column if not exists site_code text;
       alter table photos add column if not exists telegram_file_unique_id text;
       alter table photos add column if not exists synology_status text not null default 'pending';
       alter table photos add column if not exists synology_path text;
@@ -69,17 +71,47 @@ export class Database {
       create unique index if not exists photos_telegram_file_unique_id_idx
         on photos (telegram_file_unique_id)
         where telegram_file_unique_id is not null;
+      create unique index if not exists sites_user_site_code_idx
+        on sites (user_id, site_code)
+        where site_code is not null and site_code <> '';
     `);
     }
     async upsertSite(userId, name) {
+        const parsed = parseSiteName(name);
+        if (parsed.siteCode) {
+            return this.upsertSiteFromSheet(userId, parsed.siteCode, parsed.name, false);
+        }
         const result = await this.pool.query(`
-        insert into sites (user_id, name, archived_at, last_used_at)
-        values ($1, $2, null, now())
+        insert into sites (user_id, site_code, name, archived_at, last_used_at)
+        values ($1, $2, $3, null, now())
         on conflict (user_id, name)
-        do update set archived_at = null, last_used_at = now()
+        do update set site_code = coalesce(excluded.site_code, sites.site_code), archived_at = null, last_used_at = now()
         returning *
-      `, [userId, name]);
+      `, [userId, parsed.siteCode, parsed.name]);
         return rowToSite(result.rows[0]);
+    }
+    async upsertSiteFromSheet(userId, siteCode, name, archived) {
+        const fullName = siteNameWithCode(siteCode, name);
+        const result = await this.pool.query(`
+        insert into sites (user_id, site_code, name, archived_at, last_used_at)
+        values ($1, $2, $3, $4, now())
+        on conflict (user_id, site_code)
+        where site_code is not null and site_code <> ''
+        do update set name = excluded.name,
+                      archived_at = excluded.archived_at,
+                      last_used_at = now()
+        returning *
+      `, [userId, siteCode, fullName, archived ? new Date() : null]);
+        return rowToSite(result.rows[0]);
+    }
+    async findSiteByCode(userId, siteCode) {
+        const result = await this.pool.query(`
+        select *
+        from sites
+        where user_id = $1 and site_code = $2
+        limit 1
+      `, [userId, siteCode]);
+        return result.rows[0] ? rowToSite(result.rows[0]) : null;
     }
     async setCurrentSite(userId, siteId) {
         await this.pool.query(`
@@ -321,6 +353,7 @@ function rowToSite(row) {
     return {
         id: row.id,
         userId: Number(row.user_id),
+        siteCode: row.site_code,
         name: row.name,
         driveFolderId: row.drive_folder_id,
         archivedAt: row.archived_at,
@@ -356,4 +389,22 @@ function rowToReport(row) {
         driveUrl: row.drive_url,
         createdAt: row.created_at
     };
+}
+function parseSiteName(value) {
+    const trimmed = value.trim();
+    const match = trimmed.match(/^(\d{4,})[_\s-]*(.+)$/);
+    if (!match) {
+        return { siteCode: null, name: trimmed };
+    }
+    return {
+        siteCode: match[1],
+        name: match[2].trim()
+    };
+}
+function siteNameWithCode(siteCode, name) {
+    const cleanName = name.trim();
+    if (cleanName.startsWith(`${siteCode}_`)) {
+        return cleanName;
+    }
+    return `${siteCode}_${cleanName}`;
 }

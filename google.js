@@ -7,12 +7,14 @@ const DOC_MIME = 'application/vnd.google-apps.document';
 export class GoogleWorkspace {
     drive;
     docs;
+    sheets;
     rootFolderId;
     constructor(input) {
         const auth = new OAuth2Client(input.clientId, input.clientSecret);
         auth.setCredentials({ refresh_token: input.refreshToken });
         this.drive = google.drive({ version: 'v3', auth });
         this.docs = google.docs({ version: 'v1', auth });
+        this.sheets = google.sheets({ version: 'v4', auth });
         this.rootFolderId = input.rootFolderId;
     }
     async ensureRootFolder() {
@@ -114,6 +116,31 @@ export class GoogleWorkspace {
             url: existing?.url || `https://docs.google.com/document/d/${documentId}/edit`
         };
     }
+    async readSitesSheet(input) {
+        const result = await this.sheets.spreadsheets.values.get({
+            spreadsheetId: input.spreadsheetId,
+            range: input.range
+        });
+        const rows = result.data.values || [];
+        return rows
+            .filter((row, index) => index > 0 || !looksLikeHeader(row))
+            .map((row) => ({
+            code: String(row[0] || '').trim(),
+            name: String(row[1] || '').trim(),
+            status: String(row[2] || '').trim()
+        }))
+            .filter((site) => site.code && site.name);
+    }
+    async appendSiteToSheet(input) {
+        await this.sheets.spreadsheets.values.append({
+            spreadsheetId: input.spreadsheetId,
+            range: input.range,
+            valueInputOption: 'USER_ENTERED',
+            requestBody: {
+                values: [[input.code, input.name, input.status || '']]
+            }
+        });
+    }
     async findFile(name, parentId, mimeType) {
         const result = await this.drive.files.list({
             q: [
@@ -159,4 +186,10 @@ export class GoogleWorkspace {
 }
 function escapeDriveQuery(value) {
     return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+function looksLikeHeader(row) {
+    const first = String(row[0] || '').toLowerCase();
+    const second = String(row[1] || '').toLowerCase();
+    return ['code', 'site_code', '工程編號', '編號'].includes(first) ||
+        ['name', 'site_name', '地盤名', '項目名'].includes(second);
 }

@@ -16,7 +16,7 @@ async function main() {
         refreshToken: config.googleRefreshToken,
         rootFolderId: config.googleDriveRootFolderId
     });
-    const sites = new SiteService(db, google);
+    const sites = new SiteService(db, google, config.googleSitesSheet);
     const reports = new ReportService(db, google, sites);
     const sync = config.sftp ? new SftpSyncService(db, google, config.sftp) : undefined;
     const bot = createTelegramBot({
