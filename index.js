@@ -1,4 +1,5 @@
 import express from 'express';
+import { configureAdminApp } from './admin-app.js';
 import { config } from './config.js';
 import { Database } from './database.js';
 import { GoogleWorkspace } from './google.js';
@@ -30,6 +31,14 @@ async function main() {
     });
     const app = express();
     app.get('/healthz', (_req, res) => res.send('ok'));
+    configureAdminApp({
+        app,
+        db,
+        sites,
+        sync,
+        ownerUserId: config.allowedTelegramUserIds[0],
+        adminPin: config.webAdminPin
+    });
     await configureWebhook({
         app,
         bot,

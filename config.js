@@ -29,6 +29,7 @@ export const config = {
     googleClientSecret: required('GOOGLE_CLIENT_SECRET'),
     googleRefreshToken: required('GOOGLE_REFRESH_TOKEN'),
     googleDriveRootFolderId: required('GOOGLE_DRIVE_ROOT_FOLDER_ID'),
+    webAdminPin: optional('WEB_ADMIN_PIN'),
     googleSitesSheet: googleSitesSheetId
         ? {
             spreadsheetId: googleSitesSheetId,

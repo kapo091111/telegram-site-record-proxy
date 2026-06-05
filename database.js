@@ -120,6 +120,15 @@ export class Database {
       `, [userId, siteCode]);
         return result.rows[0] ? rowToSite(result.rows[0]) : null;
     }
+    async siteById(userId, siteId) {
+        const result = await this.pool.query(`
+        select *
+        from sites
+        where user_id = $1 and id = $2
+        limit 1
+      `, [userId, siteId]);
+        return result.rows[0] ? rowToSite(result.rows[0]) : null;
+    }
     async setCurrentSite(userId, siteId) {
         await this.pool.query(`
         insert into user_state (user_id, current_site_id, updated_at)

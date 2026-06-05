@@ -22,7 +22,11 @@ export function createTelegramBot(input) {
             await sendSiteButtons(ctx, input.db, ownerUserId);
             return;
         }
+        const previousSite = await input.sites.currentSite(ownerUserId);
         const site = await input.sites.useSite(ownerUserId, name);
+        if (previousSite?.id !== site.id) {
+            await input.db.setFileRemark(ownerUserId, null);
+        }
         await ctx.reply(`已切換到：${site.name}`);
     });
     bot.command('sites', async (ctx) => {
@@ -56,7 +60,11 @@ export function createTelegramBot(input) {
             await ctx.answerCbQuery('找不到項目');
             return;
         }
+        const previousSite = await input.sites.currentSite(ownerUserId);
         await input.db.setCurrentSite(ownerUserId, site.id);
+        if (previousSite?.id !== site.id) {
+            await input.db.setFileRemark(ownerUserId, null);
+        }
         await ctx.answerCbQuery(site.name);
         await ctx.editMessageText(`已切換到：${site.name}`);
     });
@@ -320,7 +328,6 @@ async function uploadTelegramFile(ctx, input, file) {
         driveFileId: uploaded.id,
         driveUrl: uploaded.url
     });
-    await input.db.setFileRemark(file.ownerUserId, null);
     if (!input.sync) {
         await ctx.reply(`已暫存：${fileName}`);
         return;
