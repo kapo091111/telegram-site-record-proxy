@@ -23,22 +23,21 @@ class UploadWorker(
 
         val baseUrl = inputData.getString("baseUrl")?.trimEnd('/') ?: return Result.failure()
         val pin = inputData.getString("pin") ?: return Result.failure()
-        val siteId = inputData.getString("siteId") ?: return Result.failure()
-        val date = inputData.getString("date") ?: ""
-        val remark = inputData.getString("remark") ?: ""
-        val filePath = inputData.getString("filePath") ?: return Result.failure()
-        val mimeType = inputData.getString("mimeType") ?: "application/octet-stream"
-        val extension = inputData.getString("extension") ?: "bin"
-        val clientFileId = inputData.getString("clientFileId") ?: filePath
-        val file = File(filePath)
-        if (!file.exists()) return Result.failure()
+        val draftId = inputData.getString("draftId") ?: return Result.failure()
+        val draft = DraftStore.find(applicationContext, draftId) ?: return Result.success()
+        val file = File(draft.filePath)
+        if (!file.exists()) {
+            DraftStore.remove(applicationContext, draftId, deleteFile = false)
+            return Result.success()
+        }
 
+        DraftStore.markUploading(applicationContext, draftId)
         return try {
             val query = listOf(
-                "siteId=${encode(siteId)}",
-                "date=${encode(date)}",
-                "remark=${encode(remark)}",
-                "extension=${encode(extension)}"
+                "siteId=${encode(draft.siteId)}",
+                "date=${encode(draft.date)}",
+                "remark=${encode(draft.remark)}",
+                "extension=${encode(draft.extension)}"
             ).joinToString("&")
             val connection = URL("$baseUrl/api/mobile/upload?$query").openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
@@ -46,8 +45,8 @@ class UploadWorker(
             connection.connectTimeout = 30_000
             connection.readTimeout = 120_000
             connection.setRequestProperty("x-admin-pin", pin)
-            connection.setRequestProperty("x-client-file-id", clientFileId)
-            connection.setRequestProperty("Content-Type", mimeType)
+            connection.setRequestProperty("x-client-file-id", draft.id)
+            connection.setRequestProperty("Content-Type", draft.mimeType)
             connection.setRequestProperty("Content-Length", file.length().toString())
             file.inputStream().use { input ->
                 connection.outputStream.use { output -> input.copyTo(output) }
@@ -55,14 +54,17 @@ class UploadWorker(
 
             val code = connection.responseCode
             if (code in 200..299) {
-                file.delete()
+                DraftStore.removeUploaded(applicationContext, draftId)
                 Result.success()
             } else if (code in 500..599 || code == 408 || code == 429) {
+                DraftStore.markPending(applicationContext, draftId)
                 Result.retry()
             } else {
+                DraftStore.markPending(applicationContext, draftId)
                 Result.failure()
             }
         } catch (_: Exception) {
+            DraftStore.markPending(applicationContext, draftId)
             Result.retry()
         }
     }
