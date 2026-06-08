@@ -1,6 +1,7 @@
 import { Markup, Telegraf } from 'telegraf';
 import { dateFolderName, hkDate, mediaFileName, normaliseDate } from './date.js';
 import { requireAllowedUser } from './auth.js';
+const pendingMediaGroups = new Map();
 export function createTelegramBot(input) {
     const bot = new Telegraf(input.token);
     const ownerUserId = input.allowedUserIds[0];
@@ -10,10 +11,10 @@ export function createTelegramBot(input) {
     bot.use(requireAllowedUser(input.allowedUserIds));
     bot.start(async (ctx) => {
         await setTelegramCommands(bot);
-        await sendMainMenu(ctx);
+        await sendMainMenu(ctx, input.db, input.sites, ownerUserId);
     });
     bot.command('menu', async (ctx) => {
-        await sendMainMenu(ctx);
+        await sendMainMenu(ctx, input.db, input.sites, ownerUserId);
     });
     bot.command('site', async (ctx) => {
         const name = commandText(ctx.message.text, '/site');
@@ -66,7 +67,7 @@ export function createTelegramBot(input) {
             await input.db.setFileRemark(ownerUserId, null);
         }
         await ctx.answerCbQuery(site.name);
-        await ctx.editMessageText(`已切換到：${site.name}`);
+        await ctx.editMessageText(`已切換到：${site.name}\n檔案備注已清除。`);
     });
     bot.action(/^archive_site:(.+)$/, async (ctx) => {
         const siteId = ctx.match[1];
@@ -159,6 +160,10 @@ export function createTelegramBot(input) {
         await ctx.answerCbQuery();
         await sendStatus(ctx, input.db, input.sites, ownerUserId);
     });
+    bot.action('menu:more', async (ctx) => {
+        await ctx.answerCbQuery();
+        await sendMoreMenu(ctx);
+    });
     bot.action('menu:report', async (ctx) => {
         await ctx.answerCbQuery();
         const site = await input.sites.currentSite(ownerUserId);
@@ -175,7 +180,9 @@ export function createTelegramBot(input) {
         const remark = value === 'clear' ? null : value;
         await input.db.setFileRemark(ownerUserId, remark);
         await ctx.answerCbQuery(remark || '清除');
-        await ctx.editMessageText(remark ? `檔案備注已設定：${remark}` : '已清除檔案備注。');
+        await ctx.editMessageText(remark
+            ? `已進入：${remark}\n之後此地盤上傳會放入 ${dateFolderName(await currentRecordDate(input.db, ownerUserId), remark)}\n切換地盤或清除後會停止。`
+            : '已清除檔案備注。');
     });
     bot.action(/^date:(today|yesterday|before_yesterday)$/, async (ctx) => {
         const selected = ctx.match[1];
@@ -241,7 +248,7 @@ export function createTelegramBot(input) {
             await ctx.reply('收不到相片。');
             return;
         }
-        await uploadTelegramFile(ctx, input, {
+        queueTelegramUpload(ctx, input, {
             ownerUserId,
             fileId: photo.file_id,
             fileUniqueId: photo.file_unique_id,
@@ -252,7 +259,7 @@ export function createTelegramBot(input) {
     });
     bot.on('document', async (ctx) => {
         const document = ctx.message.document;
-        await uploadTelegramFile(ctx, input, {
+        queueTelegramUpload(ctx, input, {
             ownerUserId,
             fileId: document.file_id,
             fileUniqueId: document.file_unique_id,
@@ -263,7 +270,7 @@ export function createTelegramBot(input) {
     });
     bot.on('video', async (ctx) => {
         const video = ctx.message.video;
-        await uploadTelegramFile(ctx, input, {
+        queueTelegramUpload(ctx, input, {
             ownerUserId,
             fileId: video.file_id,
             fileUniqueId: video.file_unique_id,
@@ -288,6 +295,93 @@ export async function configureWebhook(input) {
     });
     await setTelegramCommands(input.bot);
 }
+function queueTelegramUpload(ctx, input, file) {
+    const mediaGroupId = ctx.message?.media_group_id;
+    if (!mediaGroupId) {
+        void uploadTelegramFile(ctx, input, file);
+        return;
+    }
+    const key = `${file.ownerUserId}:${mediaGroupId}`;
+    const existing = pendingMediaGroups.get(key);
+    if (existing) {
+        clearTimeout(existing.timer);
+        existing.uploads.push({ ctx, file });
+        existing.timer = setTimeout(() => {
+            const group = pendingMediaGroups.get(key);
+            if (!group)
+                return;
+            pendingMediaGroups.delete(key);
+            void uploadTelegramFiles(group.uploads, input);
+        }, 1400);
+        return;
+    }
+    pendingMediaGroups.set(key, {
+        uploads: [{ ctx, file }],
+        timer: setTimeout(() => {
+            const group = pendingMediaGroups.get(key);
+            if (!group)
+                return;
+            pendingMediaGroups.delete(key);
+            void uploadTelegramFiles(group.uploads, input);
+        }, 1400)
+    });
+}
+async function uploadTelegramFiles(uploads, input) {
+    if (uploads.length === 0)
+        return;
+    const ctx = uploads[0].ctx;
+    const ownerUserId = uploads[0].file.ownerUserId;
+    const site = await input.sites.currentSite(ownerUserId);
+    if (!site) {
+        await ctx.reply('未選擇項目。請先輸入 /site 項目名。');
+        return;
+    }
+    const date = await currentRecordDate(input.db, ownerUserId);
+    const remark = await input.db.currentFileRemark(ownerUserId);
+    const folderName = dateFolderName(date, remark || '');
+    await ctx.reply([
+        `收到 ${uploads.length} 個檔案，正在暫存到 Google Drive。`,
+        `地盤：${site.name}`,
+        `資料夾：${folderName}`
+    ].join('\n'));
+    let saved = 0;
+    let duplicated = 0;
+    for (const upload of uploads) {
+        const result = await saveTelegramFileToDrive(upload.ctx, input, upload.file, site, date, folderName, remark || '');
+        if (result === 'saved')
+            saved += 1;
+        if (result === 'duplicate')
+            duplicated += 1;
+    }
+    if (!input.sync) {
+        await ctx.reply([
+            `已暫存：${saved} / ${uploads.length}`,
+            `重複略過：${duplicated}`,
+            `地盤：${site.name}`,
+            `資料夾：${folderName}`
+        ].join('\n'));
+        return;
+    }
+    try {
+        await input.sync.syncDate(date);
+        await ctx.reply([
+            `已完成：${saved} / ${uploads.length}`,
+            duplicated ? `重複略過：${duplicated}` : null,
+            `地盤：${site.name}`,
+            `資料夾：${folderName}`
+        ].filter(Boolean).join('\n'));
+    }
+    catch (error) {
+        console.error(error);
+        await ctx.reply([
+            `已暫存：${saved} / ${uploads.length}`,
+            duplicated ? `重複略過：${duplicated}` : null,
+            'Synology 暫時未連到，稍後會自動補傳。',
+            `地盤：${site.name}`,
+            `資料夾：${folderName}`
+        ].filter(Boolean).join('\n'));
+    }
+}
 async function uploadTelegramFile(ctx, input, file) {
     const site = await input.sites.currentSite(file.ownerUserId);
     if (!site) {
@@ -300,10 +394,50 @@ async function uploadTelegramFile(ctx, input, file) {
         return;
     }
     const date = await currentRecordDate(input.db, file.ownerUserId);
-    await ctx.reply(`收到${file.label}，正在暫存到 Google Drive。`);
     const remark = await input.db.currentFileRemark(file.ownerUserId);
     const folderName = dateFolderName(date, remark || '');
-    const dateFolderId = await input.sites.ensureDateFolder(site, date, remark || '');
+    await ctx.reply([
+        `收到${file.label}，正在暫存到 Google Drive。`,
+        `地盤：${site.name}`,
+        `資料夾：${folderName}`
+    ].join('\n'));
+    const result = await saveTelegramFileToDrive(ctx, input, file, site, date, folderName, remark || '');
+    if (result === 'duplicate') {
+        await ctx.reply('這個檔案之前已收過，已略過。');
+        return;
+    }
+    if (!input.sync) {
+        await ctx.reply([
+            '已暫存：1 / 1',
+            `地盤：${site.name}`,
+            `資料夾：${folderName}`
+        ].join('\n'));
+        return;
+    }
+    try {
+        await input.sync.syncDate(date);
+        await ctx.reply([
+            '已完成：1 / 1',
+            `地盤：${site.name}`,
+            `資料夾：${folderName}`
+        ].join('\n'));
+    }
+    catch (error) {
+        console.error(error);
+        await ctx.reply([
+            '已暫存：1 / 1',
+            'Synology 暫時未連到，稍後會自動補傳。',
+            `地盤：${site.name}`,
+            `資料夾：${folderName}`
+        ].join('\n'));
+    }
+}
+async function saveTelegramFileToDrive(ctx, input, file, site, date, folderName, remark) {
+    const existing = await input.db.photoByTelegramUniqueId(file.fileUniqueId);
+    if (existing) {
+        return 'duplicate';
+    }
+    const dateFolderId = await input.sites.ensureDateFolder(site, date, remark);
     const sequence = await input.db.nextPhotoSequence(site.id, date);
     const fileName = mediaFileName(date, sequence, file.extension);
     const fileUrl = await ctx.telegram.getFileLink(file.fileId);
@@ -328,18 +462,7 @@ async function uploadTelegramFile(ctx, input, file) {
         driveFileId: uploaded.id,
         driveUrl: uploaded.url
     });
-    if (!input.sync) {
-        await ctx.reply(`已暫存：${fileName}`);
-        return;
-    }
-    try {
-        await input.sync.syncDate(date);
-        await ctx.reply(`已上傳到 Synology：${fileName}`);
-    }
-    catch (error) {
-        console.error(error);
-        await ctx.reply(`已暫存：${fileName}\nSynology 暫時未連到，稍後會自動補傳。`);
-    }
+    return 'saved';
 }
 async function syncSitesQuietly(sites, ownerUserId) {
     try {
@@ -401,12 +524,18 @@ async function setTelegramCommands(bot) {
         { command: 'whoami', description: '顯示 Telegram user ID' }
     ]);
 }
-async function sendMainMenu(ctx) {
-    await ctx.reply('請選擇操作：', Markup.inlineKeyboard([
+async function sendMainMenu(ctx, db, sites, ownerUserId) {
+    const status = await statusText(db, sites, ownerUserId);
+    await ctx.reply(`${status}\n\n請選擇操作：`, Markup.inlineKeyboard([
         [Markup.button.callback('選地盤', 'menu:sites'), Markup.button.callback('選日期', 'menu:date')],
         [Markup.button.callback('檔案備注', 'menu:remark')],
+        [Markup.button.callback('狀態', 'menu:status'), Markup.button.callback('更多', 'menu:more')]
+    ]));
+}
+async function sendMoreMenu(ctx) {
+    await ctx.reply('更多操作：', Markup.inlineKeyboard([
         [Markup.button.callback('完成地盤', 'menu:archive_site'), Markup.button.callback('已完成地盤', 'menu:completed_sites')],
-        [Markup.button.callback('刪除地盤', 'menu:delete_site')]
+        [Markup.button.callback('刪除地盤', 'menu:delete_site'), Markup.button.callback('即時生成文件', 'menu:report')]
     ]));
 }
 async function sendRemarkButtons(ctx) {
@@ -434,18 +563,22 @@ async function sendDateButtons(ctx) {
     ]));
 }
 async function sendStatus(ctx, db, sites, ownerUserId) {
+    await ctx.reply(await statusText(db, sites, ownerUserId));
+}
+async function statusText(db, sites, ownerUserId) {
     const site = await sites.currentSite(ownerUserId);
     const date = await currentRecordDate(db, ownerUserId);
     const counts = site ? await db.syncCountsForDate(site.id, date) : { total: 0, synced: 0, pending: 0 };
     const remark = await db.currentFileRemark(ownerUserId);
-    await ctx.reply([
-        `目前項目：${site?.name || '未選擇'}`,
-        `記錄日期：${date}`,
-        `檔案備注：${remark || '無'}`,
-        `檔案：${counts.total} 個`,
-        `已同步：${counts.synced} 個`,
-        `待補傳：${counts.pending} 個`
-    ].join('\n'));
+    return [
+        `目前地盤：${site?.name || '未選擇'}`,
+        `記錄日期：${date.replace(/-/g, '')}`,
+        `資料夾：${dateFolderName(date, remark || '')}`,
+        `今日檔案：${counts.total}`,
+        `已同步：${counts.synced}`,
+        `待補傳：${counts.pending}`,
+        `Google Drive 暫存：${counts.pending}`
+    ].join('\n');
 }
 function commandText(text, command) {
     return text.replace(new RegExp(`^${command}(?:@\\S+)?\\s*`, 'i'), '').trim();

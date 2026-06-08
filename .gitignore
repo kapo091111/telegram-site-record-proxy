@@ -3,3 +3,9 @@ dist/
 .env
 .DS_Store
 npm-debug.log*
+
+site-camera-android/.gradle/
+site-camera-android/app/build/
+site-camera-android/build/
+site-camera-android/local.properties
+

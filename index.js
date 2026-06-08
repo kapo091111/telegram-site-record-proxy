@@ -3,6 +3,7 @@ import { configureAdminApp } from './admin-app.js';
 import { config } from './config.js';
 import { Database } from './database.js';
 import { GoogleWorkspace } from './google.js';
+import { configureMobileUpload } from './mobile-upload.js';
 import { ReportService } from './report-service.js';
 import { scheduleDailyReports } from './scheduler.js';
 import { SftpSyncService } from './sftp-sync.js';
@@ -34,6 +35,15 @@ async function main() {
     configureAdminApp({
         app,
         db,
+        sites,
+        sync,
+        ownerUserId: config.allowedTelegramUserIds[0],
+        adminPin: config.webAdminPin
+    });
+    configureMobileUpload({
+        app,
+        db,
+        google,
         sites,
         sync,
         ownerUserId: config.allowedTelegramUserIds[0],
