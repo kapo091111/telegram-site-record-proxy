@@ -22,7 +22,6 @@ class UploadWorker(
         setForeground(createForegroundInfo())
 
         val baseUrl = inputData.getString("baseUrl")?.trimEnd('/') ?: return Result.failure()
-        val pin = inputData.getString("pin") ?: return Result.failure()
         val draftId = inputData.getString("draftId") ?: return Result.failure()
         val draft = DraftStore.find(applicationContext, draftId) ?: return Result.success()
         val file = File(draft.filePath)
@@ -44,7 +43,7 @@ class UploadWorker(
             connection.doOutput = true
             connection.connectTimeout = 30_000
             connection.readTimeout = 120_000
-            connection.setRequestProperty("x-admin-pin", pin)
+            connection.setRequestProperty("x-mobile-app-key", BuildConfig.MOBILE_APP_KEY)
             connection.setRequestProperty("x-client-file-id", draft.id)
             connection.setRequestProperty("Content-Type", draft.mimeType)
             connection.setRequestProperty("Content-Length", file.length().toString())

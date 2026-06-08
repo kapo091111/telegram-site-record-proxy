@@ -4,13 +4,13 @@ const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
 export function configureMobileUpload(input) {
     const router = express.Router();
     router.use((req, res, next) => {
-        if (!input.adminPin) {
-            res.status(503).json({ error: '未設定 WEB_ADMIN_PIN。' });
+        if (!input.mobileAppKey) {
+            res.status(503).json({ error: '未設定 MOBILE_APP_KEY。' });
             return;
         }
-        const pin = String(req.header('x-admin-pin') || req.query.pin || '');
-        if (pin !== input.adminPin) {
-            res.status(401).json({ error: 'PIN 不正確。' });
+        const key = String(req.header('x-mobile-app-key') || req.query.key || '');
+        if (key !== input.mobileAppKey) {
+            res.status(401).json({ error: 'App key 不正確。' });
             return;
         }
         next();
@@ -29,6 +29,28 @@ export function configureMobileUpload(input) {
             folderName: dateFolderName(recordDate, remark || ''),
             sites
         });
+    });
+    router.post('/sync-sites', async (_req, res) => {
+        const result = await input.sites.syncSitesFromSheet(input.ownerUserId);
+        const sites = await input.db.listSites(input.ownerUserId, 100);
+        res.json({ ok: true, result, sites });
+    });
+    router.post('/delete-site', express.json({ limit: '1mb' }), async (req, res) => {
+        const siteId = String(req.body?.siteId || '');
+        const site = await input.db.siteById(input.ownerUserId, siteId);
+        if (!site || site.archivedAt) {
+            res.status(404).json({ error: '找不到地盤。' });
+            return;
+        }
+        const result = await input.db.deleteSiteIfEmpty(input.ownerUserId, site.id);
+        if (!result.deleted) {
+            res.status(409).json({
+                error: `這個地盤已有 ${result.fileCount} 個檔案，不能直接刪除；可以先用「完成地盤」隱藏。`
+            });
+            return;
+        }
+        const sites = await input.db.listSites(input.ownerUserId, 100);
+        res.json({ ok: true, sites });
     });
     router.post('/upload', express.raw({ type: '*/*', limit: MAX_UPLOAD_BYTES }), async (req, res) => {
         const siteId = String(req.header('x-site-id') || req.query.siteId || '');

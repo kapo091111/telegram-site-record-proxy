@@ -30,6 +30,7 @@ export const config = {
     googleRefreshToken: required('GOOGLE_REFRESH_TOKEN'),
     googleDriveRootFolderId: required('GOOGLE_DRIVE_ROOT_FOLDER_ID'),
     webAdminPin: optional('WEB_ADMIN_PIN'),
+    mobileAppKey: optional('MOBILE_APP_KEY', 'kenneth-site-camera-mobile-v1'),
     googleSitesSheet: googleSitesSheetId
         ? {
             spreadsheetId: googleSitesSheetId,

@@ -1,7 +1,6 @@
 package com.bom.sitecamera
 
 import android.Manifest
-import android.app.AlertDialog
 import android.app.DatePickerDialog
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -11,23 +10,14 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.net.Uri
 import android.os.Bundle
+import android.provider.MediaStore
 import android.provider.OpenableColumns
-import android.text.InputType
-import android.view.Gravity
 import android.view.MotionEvent
-import android.view.View
-import android.widget.Button
-import android.widget.EditText
-import android.widget.FrameLayout
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.SeekBar
-import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
-import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
@@ -38,16 +28,67 @@ import androidx.camera.core.Preview
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.work.Data
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
+import androidx.core.content.FileProvider
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeFormatter.ofPattern
@@ -55,32 +96,49 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-class MainActivity : ComponentActivity() {
-    private lateinit var statusText: TextView
-    private lateinit var currentSiteText: TextView
-    private lateinit var folderText: TextView
-    private lateinit var countsText: TextView
-    private lateinit var syncText: TextView
-    private lateinit var baseUrlInput: EditText
-    private lateinit var pinInput: EditText
-    private lateinit var siteIdInput: EditText
-    private lateinit var dateInput: EditText
-    private lateinit var remarkInput: EditText
-    private lateinit var siteSearchInput: EditText
-    private lateinit var siteList: LinearLayout
-    private lateinit var draftList: LinearLayout
-    private lateinit var previewView: PreviewView
+private enum class Screen {
+    Home,
+    Camera,
+    Review
+}
 
-    private var selectedSiteName: String = ""
-    private var sites = JSONArray()
+private enum class LensMode {
+    Wide,
+    Main,
+    Tele
+}
+
+private data class SiteOption(
+    val id: String,
+    val name: String
+)
+
+class MainActivity : ComponentActivity() {
+    private var screen by mutableStateOf(Screen.Home)
+    private var message by mutableStateOf("")
+    private var selectedSiteId by mutableStateOf("")
+    private var selectedSiteName by mutableStateOf("")
+    private var recordDate by mutableStateOf(todayString(0))
+    private var remark by mutableStateOf("")
+    private var baseUrl by mutableStateOf("https://telegram-site-record-proxy.onrender.com")
+    private var sites by mutableStateOf<List<SiteOption>>(emptyList())
+    private var drafts by mutableStateOf<List<UploadDraft>>(emptyList())
+    private var siteSearch by mutableStateOf("")
+    private var showAdvanced by mutableStateOf(false)
+    private var uploadStatus by mutableStateOf("")
+    private var isUploading by mutableStateOf(false)
+    private var reviewIndex by mutableIntStateOf(0)
+    private var flashMode by mutableIntStateOf(ImageCapture.FLASH_MODE_OFF)
+    private var lensMode by mutableStateOf(LensMode.Main)
+    private var zoomValue by mutableFloatStateOf(0f)
+
+    private lateinit var previewView: PreviewView
     private var imageCapture: ImageCapture? = null
     private var camera: Camera? = null
     private var cameraProvider: ProcessCameraProvider? = null
-    private var flashMode = ImageCapture.FLASH_MODE_OFF
-    private var zoomSlider: SeekBar? = null
-    private var lensMode = LensMode.MAIN
+    private var systemCameraFile: File? = null
 
-    private val picker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    private val galleryPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode != RESULT_OK) return@registerForActivityResult
         val data = result.data ?: return@registerForActivityResult
         val clipData = data.clipData
@@ -91,180 +149,553 @@ class MainActivity : ComponentActivity() {
         } else {
             data.data?.let { copyUriToDraft(it) }
         }
-        showMainScreen("已加入待上傳清單。")
+        refreshDrafts()
+        reviewIndex = (drafts.lastIndex).coerceAtLeast(0)
+        screen = Screen.Review
+        message = "已加入待上傳清單。"
     }
 
-    private val editLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        showMainScreen("已更新編輯版本。")
+    private val systemCamera = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val file = systemCameraFile ?: return@registerForActivityResult
+        if (result.resultCode == RESULT_OK && file.exists() && file.length() > 0) {
+            DraftStore.add(this, file, "image/jpeg", "jpg", selectedSiteId, selectedSiteName, recordDate, remark)
+            refreshDrafts()
+            message = "已用 HONOR 相機加入待上傳。"
+        } else {
+            file.delete()
+        }
+        systemCameraFile = null
+    }
+
+    private val editorLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        refreshDrafts()
+        screen = Screen.Review
+        message = "已更新編輯版本。"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        selectedSiteName = prefs().getString("siteName", "") ?: ""
-        showMainScreen()
-    }
-
-    private fun showMainScreen(message: String = "") {
-        cameraProvider?.unbindAll()
-        imageCapture = null
-        camera = null
-
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(12), dp(12), dp(24))
-            setBackgroundColor(Color.rgb(245, 247, 244))
-        }
-        val root = ScrollView(this).apply { addView(content) }
-
-        statusText = TextView(this).apply {
-            text = message.ifBlank { "先選好地盤、日期、備注，再拍照或選相。" }
-            textSize = 14f
-            setTextColor(Color.rgb(90, 104, 96))
-            setPadding(0, 0, 0, dp(10))
-        }
-        content.addView(title("工程現場記錄"))
-        content.addView(statusText)
-        content.addView(currentCard())
-        content.addView(uploadSettingsCard())
-        content.addView(siteCard())
-        content.addView(draftsCard())
-        setContentView(root)
-        refreshSites()
+        loadSettings()
         refreshDrafts()
-        refreshSummary()
+        setContent { SiteCameraApp() }
+        fetchState(silent = true)
     }
 
-    private fun currentCard(): View {
-        currentSiteText = metric("地盤", selectedSiteName.ifBlank { "未選擇" })
-        folderText = metric("資料夾", folderNamePreview())
-        countsText = metric("今日檔案", "${DraftStore.list(this).size} 個待上傳")
-        syncText = metric("同步", "正常")
-        return card("目前設定").apply {
-            addView(currentSiteText)
-            addView(folderText)
-            addView(countsText)
-            addView(syncText)
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 100 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            startCamera()
         }
     }
 
-    private fun uploadSettingsCard(): LinearLayout {
-        baseUrlInput = edit("Render URL", savedBaseUrl(), InputType.TYPE_TEXT_VARIATION_URI)
-        pinInput = edit("WEB_ADMIN_PIN", savedPin(), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
-        siteIdInput = edit("地盤 ID", savedSiteId(), InputType.TYPE_CLASS_TEXT)
-        dateInput = edit("日期", displayDate(savedDate()), InputType.TYPE_CLASS_TEXT)
-        remarkInput = edit("檔案備注", savedRemark(), InputType.TYPE_CLASS_TEXT)
-
-        return card("上傳設定").apply {
-            addView(baseUrlInput)
-            addView(pinInput)
-            addView(siteIdInput)
-            addView(row(
-                button("選日期", false) { showDatePicker() },
-                button("今日", false) { setDate(todayString(0)) },
-                button("昨日", false) { setDate(todayString(-1)) }
-            ))
-            addView(remarkInput)
-            addView(row(
-                button("打拆", false) { setRemark("打拆") },
-                button("水電完成", false) { setRemark("水電完成") },
-                button("泥水完成", false) { setRemark("泥水完成") },
-                button("清除", danger = true) { setRemark("") }
-            ))
-            addView(row(
-                button("儲存設定", false) {
-                    saveSettings()
-                    refreshSummary()
-                    statusText.text = "設定已儲存。"
-                },
-                button("拍照上傳", true) {
-                    saveSettings()
-                    if (hasRequiredSettings()) showCameraScreen()
-                },
-                button("相簿選取", false) {
-                    saveSettings()
-                    openGallery()
+    @Composable
+    private fun SiteCameraApp() {
+        MaterialTheme {
+            Surface(color = ComposeColor(0xfff4f6f2), modifier = Modifier.fillMaxSize()) {
+                when (screen) {
+                    Screen.Home -> HomeScreen()
+                    Screen.Camera -> CameraScreen()
+                    Screen.Review -> ReviewScreen()
                 }
-            ))
-        }
-    }
-
-    private fun siteCard(): LinearLayout {
-        siteSearchInput = edit("搜尋 25026 / 海怡 / 2401", "", InputType.TYPE_CLASS_TEXT)
-        siteList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        siteSearchInput.setOnEditorActionListener { _, _, _ ->
-            refreshSites()
-            true
-        }
-        return card("地盤").apply {
-            addView(siteSearchInput)
-            addView(row(
-                button("同步 Sheet", false) { fetchSites() },
-                button("篩選", false) { refreshSites() }
-            ))
-            addView(siteList)
-        }
-    }
-
-    private fun draftsCard(): LinearLayout {
-        draftList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        return card("待上傳").apply {
-            addView(draftList)
-            addView(row(
-                button("上傳全部", true) { uploadAllDrafts() },
-                button("重新整理", false) { refreshDrafts() }
-            ))
-        }
-    }
-
-    private fun showCameraScreen() {
-        val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
-        previewView = PreviewView(this)
-        root.addView(previewView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-
-        val top = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(dp(12), dp(16), dp(12), dp(8))
-            addView(cameraButton("返回") { showMainScreen() })
-            addView(cameraButton("0.5x") {
-                lensMode = LensMode.WIDE
-                startCamera()
-            })
-            addView(cameraButton("1x") {
-                lensMode = LensMode.MAIN
-                startCamera()
-            })
-            addView(cameraButton("閃光") { toggleFlash() })
-        }
-        root.addView(top, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP))
-
-        val bottom = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(20), dp(8), dp(20), dp(24))
-            zoomSlider = SeekBar(this@MainActivity).apply {
-                max = 100
-                progress = 0
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                        if (fromUser) setLinearZoom(progress / 100f)
-                    }
-                    override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                    override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-                })
             }
-            addView(zoomSlider, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-            addView(cameraButton("拍照加入待上傳") { capturePhoto() })
         }
-        root.addView(bottom, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+    }
 
-        previewView.setOnTouchListener { _, event ->
-            if (event.action == MotionEvent.ACTION_UP) focusAt(event.x, event.y)
-            true
+    @Composable
+    private fun HomeScreen() {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                Text("工程現場記錄", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text("選好設定後直接拍照，完成後一次過上傳。", color = ComposeColor(0xff64706a))
+            }
+            item { SummaryCard() }
+            item { ActionCard() }
+            item { SiteCard() }
+            item { DraftCard() }
+            if (message.isNotBlank() || uploadStatus.isNotBlank()) {
+                item {
+                    Text(
+                        listOf(message, uploadStatus).filter { it.isNotBlank() }.joinToString("\n\n"),
+                        color = ComposeColor(0xff355243),
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                }
+            }
         }
+        if (showAdvanced) AdvancedDialog()
+    }
 
-        setContentView(root)
-        requestCameraPermission()
+    @Composable
+    private fun SummaryCard() {
+        Panel("目前設定") {
+            InfoTile("地盤", selectedSiteName.ifBlank { "未選擇" })
+            InfoTile("資料夾", folderNamePreview())
+            InfoTile("待上傳", "${drafts.size} 個檔案")
+            InfoTile("同步", if (isUploading) "上傳中" else "正常")
+        }
+    }
+
+    @Composable
+    private fun ActionCard() {
+        Panel("拍攝設定") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = { showDatePicker() }, modifier = Modifier.weight(1f)) {
+                    Text(displayDate(recordDate))
+                }
+                SoftButton("今日", Modifier.weight(1f)) { setDate(todayString(0)) }
+                SoftButton("昨日", Modifier.weight(1f)) { setDate(todayString(-1)) }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                RemarkButton("打拆", Modifier.weight(1f))
+                RemarkButton("水電完成", Modifier.weight(1f))
+                RemarkButton("泥水完成", Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = remark,
+                onValueChange = {
+                    remark = it.trim()
+                    saveSettings()
+                },
+                label = { Text("備注") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = { openCamera() }, modifier = Modifier.weight(1f), colors = greenButton()) {
+                    Text("拍照")
+                }
+                OutlinedButton(onClick = { openGallery() }, modifier = Modifier.weight(1f)) {
+                    Text("相簿")
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = { screen = Screen.Review }, modifier = Modifier.weight(1f), enabled = drafts.isNotEmpty()) {
+                    Text("查看待上傳")
+                }
+                TextButton(onClick = { showAdvanced = true }, modifier = Modifier.weight(1f)) {
+                    Text("進階設定")
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun SiteCard() {
+        val filtered = sites.filter { site ->
+            val query = siteSearch.trim()
+            query.isBlank() || site.name.contains(query, ignoreCase = true)
+        }
+        Panel("地盤") {
+            OutlinedTextField(
+                value = siteSearch,
+                onValueChange = { siteSearch = it },
+                label = { Text("搜尋 25026 / 海怡 / 2401") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                SoftButton("同步 Sheet", Modifier.weight(1f)) { syncSites() }
+                OutlinedButton(onClick = { fetchState() }, modifier = Modifier.weight(1f)) {
+                    Text("重新整理")
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            if (filtered.isEmpty()) {
+                Text("未有地盤。請先同步 Sheet。", color = ComposeColor(0xff64706a))
+            } else {
+                filtered.take(30).forEach { site ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(
+                            onClick = {
+                                selectedSiteId = site.id
+                                selectedSiteName = site.name
+                                saveSettings()
+                                message = "已選擇：${site.name}"
+                            },
+                            colors = if (site.id == selectedSiteId) greenButton() else ButtonDefaults.buttonColors(
+                                containerColor = ComposeColor.White,
+                                contentColor = ComposeColor(0xff17231d)
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(site.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                        OutlinedButton(onClick = { deleteSite(site) }) {
+                            Text("刪除", color = ComposeColor(0xffb42318))
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun DraftCard() {
+        Panel("待上傳") {
+            if (drafts.isEmpty()) {
+                Text("未有待上傳檔案。", color = ComposeColor(0xff64706a))
+            } else {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    drafts.take(12).forEachIndexed { index, draft ->
+                        DraftThumb(draft, selected = false, modifier = Modifier.clickable {
+                            reviewIndex = index
+                            screen = Screen.Review
+                        })
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = { uploadAllDrafts() },
+                    enabled = drafts.isNotEmpty() && !isUploading,
+                    modifier = Modifier.weight(1f),
+                    colors = greenButton()
+                ) {
+                    Text(if (isUploading) "上傳中" else "上傳全部")
+                }
+                OutlinedButton(onClick = { refreshDrafts() }, modifier = Modifier.weight(1f)) {
+                    Text("重新整理")
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun CameraScreen() {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(ComposeColor.Black)
+        ) {
+            AndroidView(
+                factory = { context ->
+                    PreviewView(context).also {
+                        previewView = it
+                        it.setOnTouchListener { _, event ->
+                            if (event.action == MotionEvent.ACTION_UP) focusAt(event.x, event.y)
+                            true
+                        }
+                        requestCameraPermission()
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, _, zoom, _ ->
+                            val next = (zoomValue + ((zoom - 1f) * 0.18f)).coerceIn(0f, 1f)
+                            zoomValue = next
+                            setLinearZoom(next)
+                        }
+                    }
+            )
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    CameraPill("返回") { screen = Screen.Home }
+                    CameraPill(flashLabel()) { toggleFlash() }
+                    CameraPill("HONOR 相機") { openSystemCamera() }
+                }
+                Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
+                    CameraPill("0.5x", active = lensMode == LensMode.Wide) {
+                        lensMode = LensMode.Wide
+                        zoomValue = 0f
+                        startCamera()
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    CameraPill("1x", active = lensMode == LensMode.Main) {
+                        lensMode = LensMode.Main
+                        zoomValue = 0f
+                        startCamera()
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    CameraPill("2x", active = lensMode == LensMode.Tele) {
+                        lensMode = LensMode.Tele
+                        zoomValue = 0.45f
+                        startCamera()
+                    }
+                }
+            }
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Slider(value = zoomValue, onValueChange = {
+                    zoomValue = it
+                    setLinearZoom(it)
+                })
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    DraftCounter()
+                    Box(
+                        modifier = Modifier
+                            .size(76.dp)
+                            .clip(CircleShape)
+                            .border(4.dp, ComposeColor.White, CircleShape)
+                            .clickable { capturePhoto() }
+                    )
+                    LatestThumb()
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun ReviewScreen() {
+        val safeDrafts = drafts
+        if (safeDrafts.isEmpty()) {
+            screen = Screen.Home
+            return
+        }
+        val index = reviewIndex.coerceIn(0, safeDrafts.lastIndex)
+        val draft = safeDrafts[index]
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(ComposeColor.Black)
+                .padding(12.dp)
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                CameraPill("返回相機") { screen = Screen.Camera }
+                CameraPill("主畫面") { screen = Screen.Home }
+                Spacer(Modifier.weight(1f))
+                CameraPill("${index + 1} / ${safeDrafts.size}") {}
+            }
+            Spacer(Modifier.height(12.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                LargePreview(draft)
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                safeDrafts.forEachIndexed { itemIndex, item ->
+                    DraftThumb(item, selected = itemIndex == index, modifier = Modifier.clickable { reviewIndex = itemIndex })
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = { reviewIndex = (index - 1).coerceAtLeast(0) }, modifier = Modifier.weight(1f)) {
+                    Text("上一張")
+                }
+                OutlinedButton(onClick = { reviewIndex = (index + 1).coerceAtMost(safeDrafts.lastIndex) }, modifier = Modifier.weight(1f)) {
+                    Text("下一張")
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = { openEditor(draft.id) }, enabled = draft.mimeType.startsWith("image/"), modifier = Modifier.weight(1f), colors = greenButton()) {
+                    Text("編輯")
+                }
+                OutlinedButton(onClick = { removeDraft(draft.id) }, modifier = Modifier.weight(1f)) {
+                    Text("刪除", color = ComposeColor(0xffffd3cc))
+                }
+                Button(onClick = { uploadAllDrafts() }, enabled = !isUploading, modifier = Modifier.weight(1f), colors = greenButton()) {
+                    Text("上傳")
+                }
+            }
+            if (uploadStatus.isNotBlank()) {
+                Text(uploadStatus, color = ComposeColor.White, modifier = Modifier.padding(top = 8.dp))
+            }
+        }
+    }
+
+    @Composable
+    private fun AdvancedDialog() {
+        var draftBaseUrl by mutableStateOf(baseUrl)
+        AlertDialog(
+            onDismissRequest = { showAdvanced = false },
+            title = { Text("進階設定") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("日常使用不需要填 PIN。App 會使用內置 mobile app key。")
+                    OutlinedTextField(
+                        value = draftBaseUrl,
+                        onValueChange = { draftBaseUrl = it },
+                        label = { Text("Render URL") },
+                        singleLine = true
+                    )
+                    Text("目前 App key：已隱藏", color = ComposeColor(0xff64706a))
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    baseUrl = draftBaseUrl.trim().trimEnd('/')
+                    saveSettings()
+                    showAdvanced = false
+                }) { Text("儲存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAdvanced = false }) { Text("取消") }
+            }
+        )
+    }
+
+    @Composable
+    private fun Panel(title: String, content: @Composable () -> Unit) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = ComposeColor.White),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                content()
+            }
+        }
+    }
+
+    @Composable
+    private fun InfoTile(label: String, value: String) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, ComposeColor(0xffdce4dc), RoundedCornerShape(10.dp))
+                .padding(12.dp)
+        ) {
+            Text(label, color = ComposeColor(0xff64706a), style = MaterialTheme.typography.labelMedium)
+            Text(value, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+
+    @Composable
+    private fun RemarkButton(value: String, modifier: Modifier = Modifier) {
+        val active = remark == value
+        Button(
+            onClick = {
+                remark = if (active) "" else value
+                saveSettings()
+            },
+            modifier = modifier,
+            colors = if (active) greenButton() else ButtonDefaults.buttonColors(
+                containerColor = ComposeColor(0xffdff2e7),
+                contentColor = ComposeColor(0xff145b38)
+            )
+        ) {
+            Text(value, maxLines = 1)
+        }
+    }
+
+    @Composable
+    private fun SoftButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+        Button(
+            onClick = onClick,
+            modifier = modifier,
+            colors = ButtonDefaults.buttonColors(containerColor = ComposeColor(0xffdff2e7), contentColor = ComposeColor(0xff145b38))
+        ) {
+            Text(label)
+        }
+    }
+
+    @Composable
+    private fun CameraPill(label: String, active: Boolean = false, onClick: () -> Unit) {
+        Button(
+            onClick = onClick,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (active) ComposeColor.White else ComposeColor(0xaa111111),
+                contentColor = if (active) ComposeColor.Black else ComposeColor.White
+            ),
+            shape = RoundedCornerShape(999.dp)
+        ) {
+            Text(label)
+        }
+    }
+
+    @Composable
+    private fun DraftCounter() {
+        Text(
+            "${drafts.size} 張",
+            color = ComposeColor.White,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .background(ComposeColor(0x66000000), RoundedCornerShape(999.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        )
+    }
+
+    @Composable
+    private fun LatestThumb() {
+        val latest = drafts.lastOrNull()
+        if (latest == null) {
+            Box(Modifier.size(58.dp))
+            return
+        }
+        DraftThumb(latest, selected = false, modifier = Modifier.clickable {
+            reviewIndex = drafts.lastIndex
+            screen = Screen.Review
+        })
+    }
+
+    @Composable
+    private fun DraftThumb(draft: UploadDraft, selected: Boolean, modifier: Modifier = Modifier) {
+        val bitmap = if (draft.mimeType.startsWith("image/")) BitmapFactory.decodeFile(draft.filePath) else null
+        Box(
+            modifier = modifier
+                .size(58.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(ComposeColor(0xff27332d))
+                .then(if (selected) Modifier.border(3.dp, ComposeColor.White, RoundedCornerShape(10.dp)) else Modifier)
+        ) {
+            if (bitmap != null) {
+                Image(bitmap = bitmap.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize())
+            } else {
+                Text(draft.extension.uppercase(Locale.ROOT), color = ComposeColor.White, modifier = Modifier.align(Alignment.Center))
+            }
+        }
+    }
+
+    @Composable
+    private fun LargePreview(draft: UploadDraft) {
+        val bitmap = if (draft.mimeType.startsWith("image/")) BitmapFactory.decodeFile(draft.filePath) else null
+        if (bitmap != null) {
+            Image(bitmap = bitmap.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxWidth())
+        } else {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(draft.extension.uppercase(Locale.ROOT), color = ComposeColor.White, style = MaterialTheme.typography.headlineLarge)
+                Text(draft.filePath.substringAfterLast(File.separator), color = ComposeColor(0xffcfd8d2))
+            }
+        }
+    }
+
+    @Composable
+    private fun greenButton() = ButtonDefaults.buttonColors(
+        containerColor = ComposeColor(0xff2f8f5b),
+        contentColor = ComposeColor.White
+    )
+
+    private fun openCamera() {
+        if (!hasRequiredSettings()) return
+        saveSettings()
+        screen = Screen.Camera
     }
 
     private fun requestCameraPermission() {
@@ -275,12 +706,8 @@ class MainActivity : ComponentActivity() {
         ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 100)
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 100 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) startCamera()
-    }
-
     private fun startCamera() {
+        if (!::previewView.isInitialized) return
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             cameraProvider = future.get()
@@ -291,18 +718,20 @@ class MainActivity : ComponentActivity() {
                 .build()
             val selector = chooseCameraSelector()
             cameraProvider?.unbindAll()
-            camera = cameraProvider?.bindToLifecycle(this, selector, preview, imageCapture)
-            applyWideFallback()
+            camera = try {
+                cameraProvider?.bindToLifecycle(this, selector, preview, imageCapture)
+            } catch (_: Exception) {
+                cameraProvider?.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageCapture)
+            }
+            applyLensZoom()
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun chooseCameraSelector(): CameraSelector {
-        if (lensMode == LensMode.WIDE) {
+        if (lensMode == LensMode.Wide) {
             wideCameraId()?.let { cameraId ->
                 return CameraSelector.Builder()
-                    .addCameraFilter { infos ->
-                        infos.filter { Camera2Id.fromCameraInfo(it) == cameraId }
-                    }
+                    .addCameraFilter { infos -> infos.filter { Camera2Id.fromCameraInfo(it) == cameraId } }
                     .build()
             }
         }
@@ -321,10 +750,14 @@ class MainActivity : ComponentActivity() {
         }.minByOrNull { it.second }?.first
     }
 
-    private fun applyWideFallback() {
-        if (lensMode == LensMode.WIDE) {
-            camera?.cameraControl?.setLinearZoom(0f)
+    private fun applyLensZoom() {
+        val target = when (lensMode) {
+            LensMode.Wide -> 0f
+            LensMode.Main -> zoomValue
+            LensMode.Tele -> 0.45f.coerceAtLeast(zoomValue)
         }
+        zoomValue = target
+        setLinearZoom(target)
     }
 
     private fun setLinearZoom(value: Float) {
@@ -333,11 +766,19 @@ class MainActivity : ComponentActivity() {
 
     private fun toggleFlash() {
         flashMode = when (flashMode) {
-            ImageCapture.FLASH_MODE_OFF -> ImageCapture.FLASH_MODE_ON
-            ImageCapture.FLASH_MODE_ON -> ImageCapture.FLASH_MODE_AUTO
+            ImageCapture.FLASH_MODE_OFF -> ImageCapture.FLASH_MODE_AUTO
+            ImageCapture.FLASH_MODE_AUTO -> ImageCapture.FLASH_MODE_ON
             else -> ImageCapture.FLASH_MODE_OFF
         }
         imageCapture?.flashMode = flashMode
+    }
+
+    private fun flashLabel(): String {
+        return when (flashMode) {
+            ImageCapture.FLASH_MODE_AUTO -> "閃光：自動"
+            ImageCapture.FLASH_MODE_ON -> "閃光：開"
+            else -> "閃光：關"
+        }
     }
 
     private fun focusAt(x: Float, y: Float) {
@@ -347,6 +788,7 @@ class MainActivity : ComponentActivity() {
             .setAutoCancelDuration(3, TimeUnit.SECONDS)
             .build()
         camera?.cameraControl?.startFocusAndMetering(action)
+        Toast.makeText(this, "已對焦", Toast.LENGTH_SHORT).show()
     }
 
     private fun capturePhoto() {
@@ -355,122 +797,37 @@ class MainActivity : ComponentActivity() {
         val outputOptions = ImageCapture.OutputFileOptions.Builder(outputFile).build()
         capture.takePicture(outputOptions, ContextCompat.getMainExecutor(this), object : ImageCapture.OnImageSavedCallback {
             override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                DraftStore.add(this@MainActivity, outputFile, "image/jpeg", "jpg", savedSiteId(), selectedSiteName, savedDate(), savedRemark())
-                showMainScreen("已加入待上傳清單，可繼續拍照或檢查後上傳。")
+                DraftStore.add(this@MainActivity, outputFile, "image/jpeg", "jpg", selectedSiteId, selectedSiteName, recordDate, remark)
+                refreshDrafts()
+                message = "已加入待上傳，可繼續拍照。"
             }
+
             override fun onError(exception: ImageCaptureException) {
-                showMainScreen("拍照失敗：${exception.message}")
+                message = "拍照失敗：${exception.message}"
             }
         })
     }
 
-    private fun fetchSites() {
-        saveSettings()
-        val baseUrl = savedBaseUrl().trimEnd('/')
-        val pin = savedPin()
-        if (baseUrl.isBlank()) {
-            statusText.text = "請先填 Render URL。"
-            return
+    private fun openSystemCamera() {
+        if (!hasRequiredSettings()) return
+        val file = File(DraftStore.draftsDir(this), "honor_${System.currentTimeMillis()}.jpg")
+        val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
+        systemCameraFile = file
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        if (pin.isBlank()) {
-            statusText.text = "請先填 WEB_ADMIN_PIN。"
-            return
-        }
-        statusText.text = "同步地盤中..."
-        Thread {
-            try {
-                val connection = URL("$baseUrl/api/mobile/state").openConnection() as HttpURLConnection
-                connection.requestMethod = "GET"
-                connection.connectTimeout = 30_000
-                connection.readTimeout = 30_000
-                connection.setRequestProperty("x-admin-pin", pin)
-                val code = connection.responseCode
-                val body = (if (code in 200..299) connection.inputStream else connection.errorStream)
-                    ?.bufferedReader()?.use { it.readText() }.orEmpty()
-                if (code !in 200..299) throw IllegalStateException("HTTP $code：${errorMessage(body)}")
-                val json = JSONObject(body)
-                sites = json.getJSONArray("sites")
-                json.optJSONObject("currentSite")?.let {
-                    siteIdInput.setText(it.getString("id"))
-                    selectedSiteName = it.getString("name")
-                }
-                runOnUiThread {
-                    saveSettings()
-                    refreshSites()
-                    refreshSummary()
-                    statusText.text = "已同步地盤。"
-                }
-            } catch (error: Exception) {
-                runOnUiThread { statusText.text = "同步地盤失敗：${error.message}" }
-            }
-        }.start()
-    }
-
-    private fun refreshSites() {
-        if (!::siteList.isInitialized) return
-        siteList.removeAllViews()
-        val query = if (::siteSearchInput.isInitialized) siteSearchInput.text.toString().trim() else ""
-        for (index in 0 until sites.length()) {
-            val site = sites.getJSONObject(index)
-            val name = site.getString("name")
-            val id = site.getString("id")
-            if (query.isNotBlank() && !name.contains(query, true)) continue
-            siteList.addView(row(
-                button(name, id == savedSiteId()) {
-                    siteIdInput.setText(id)
-                    selectedSiteName = name
-                    saveSettings()
-                    refreshSummary()
-                    refreshSites()
-                },
-                button("刪除", danger = true) { deleteSite(id, name) }
-            ))
-        }
-    }
-
-    private fun deleteSite(id: String, name: String) {
-        AlertDialog.Builder(this)
-            .setTitle("刪除地盤")
-            .setMessage("確定刪除「$name」？只有無檔案地盤可以刪除。")
-            .setPositiveButton("刪除") { _, _ -> deleteSiteRequest(id) }
-            .setNegativeButton("取消", null)
-            .show()
-    }
-
-    private fun deleteSiteRequest(id: String) {
-        Thread {
-            try {
-                val body = JSONObject().put("siteId", id).toString()
-                val connection = URL("${savedBaseUrl().trimEnd('/')}/api/admin/delete-site").openConnection() as HttpURLConnection
-                connection.requestMethod = "POST"
-                connection.doOutput = true
-                connection.setRequestProperty("x-admin-pin", savedPin())
-                connection.setRequestProperty("Content-Type", "application/json")
-                connection.outputStream.use { it.write(body.toByteArray()) }
-                val code = connection.responseCode
-                val response = (if (code in 200..299) connection.inputStream else connection.errorStream)
-                    ?.bufferedReader()?.use { it.readText() }.orEmpty()
-                if (code !in 200..299) throw IllegalStateException(errorMessage(response))
-                runOnUiThread {
-                    statusText.text = "已刪除地盤。請重新同步 Sheet。"
-                    fetchSites()
-                }
-            } catch (error: Exception) {
-                runOnUiThread { statusText.text = "刪除失敗：${error.message}" }
-            }
-        }.start()
+        systemCamera.launch(intent)
     }
 
     private fun openGallery() {
-        saveSettings()
         if (!hasRequiredSettings()) return
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
             putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*", "application/pdf"))
         }
-        picker.launch(intent)
+        galleryPicker.launch(intent)
     }
 
     private fun copyUriToDraft(uri: Uri) {
@@ -479,265 +836,255 @@ class MainActivity : ComponentActivity() {
         val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
         val outputFile = File(DraftStore.draftsDir(this), "${UUID.randomUUID()}.$extension")
         contentResolver.openInputStream(uri)?.use { input -> outputFile.outputStream().use { output -> input.copyTo(output) } }
-        DraftStore.add(this, outputFile, mimeType, extension, savedSiteId(), selectedSiteName, savedDate(), savedRemark())
+        DraftStore.add(this, outputFile, mimeType, extension, selectedSiteId, selectedSiteName, recordDate, remark)
     }
 
-    private fun refreshDrafts() {
-        if (!::draftList.isInitialized) return
-        draftList.removeAllViews()
-        val drafts = DraftStore.list(this)
-        countsText.text = "今日檔案：${drafts.size} 個待上傳"
-        if (drafts.isEmpty()) {
-            draftList.addView(TextView(this).apply {
-                text = "暫時未有待上傳相片。"
-                setTextColor(Color.rgb(90, 104, 96))
-                setPadding(0, dp(8), 0, dp(8))
-            })
-            return
-        }
-        drafts.forEach { draft ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(6), 0, dp(6))
-            }
-            val thumb = ImageView(this).apply {
-                scaleType = ImageView.ScaleType.CENTER_CROP
-                setBackgroundColor(Color.rgb(230, 236, 230))
-                val bitmap = BitmapFactory.decodeFile(draft.filePath)
-                if (bitmap != null) setImageBitmap(bitmap)
-            }
-            row.addView(thumb, LinearLayout.LayoutParams(dp(70), dp(70)))
-            row.addView(TextView(this).apply {
-                text = "${draft.date}${draft.remark}\n${draft.siteName}\n${draft.status}"
-                setPadding(dp(8), 0, dp(8), 0)
-            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            row.addView(button("編輯", false) { openEditor(draft.id) })
-            row.addView(button("刪除", danger = true) {
-                DraftStore.remove(this, draft.id)
-                refreshDrafts()
-                refreshSummary()
-            })
-            draftList.addView(row)
+    private fun displayName(uri: Uri): String? {
+        return contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (cursor.moveToFirst() && index >= 0) cursor.getString(index) else null
         }
     }
 
-    private fun openEditor(draftId: String) {
-        editLauncher.launch(Intent(this, EditActivity::class.java).putExtra("draftId", draftId))
+    private fun fetchState(silent: Boolean = false) {
+        if (!silent) message = "同步地盤中..."
+        Thread {
+            try {
+                val connection = URL("${baseUrl.trimEnd('/')}/api/mobile/state").openConnection() as HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 30_000
+                connection.readTimeout = 30_000
+                connection.setRequestProperty("x-mobile-app-key", BuildConfig.MOBILE_APP_KEY)
+                val code = connection.responseCode
+                val body = responseText(connection, code)
+                if (code !in 200..299) throw IllegalStateException(errorMessage(body))
+                val json = JSONObject(body)
+                val loadedSites = parseSites(json.getJSONArray("sites"))
+                runOnUiThread {
+                    sites = loadedSites
+                    json.optJSONObject("currentSite")?.let {
+                        selectedSiteId = it.optString("id", selectedSiteId)
+                        selectedSiteName = it.optString("name", selectedSiteName)
+                    }
+                    recordDate = json.optString("recordDate", recordDate)
+                    remark = json.optString("remark", remark)
+                    saveSettings()
+                    if (!silent) message = "已同步地盤。"
+                }
+            } catch (error: Exception) {
+                runOnUiThread { message = "同步失敗：${error.message}" }
+            }
+        }.start()
+    }
+
+    private fun syncSites() {
+        message = "正在同步 Google Sheet..."
+        Thread {
+            try {
+                val connection = URL("${baseUrl.trimEnd('/')}/api/mobile/sync-sites").openConnection() as HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.connectTimeout = 30_000
+                connection.readTimeout = 60_000
+                connection.setRequestProperty("x-mobile-app-key", BuildConfig.MOBILE_APP_KEY)
+                val code = connection.responseCode
+                val body = responseText(connection, code)
+                if (code !in 200..299) throw IllegalStateException(errorMessage(body))
+                val json = JSONObject(body)
+                val loadedSites = parseSites(json.getJSONArray("sites"))
+                runOnUiThread {
+                    sites = loadedSites
+                    message = "已同步 ${loadedSites.size} 個地盤。"
+                }
+            } catch (error: Exception) {
+                runOnUiThread { message = "同步 Sheet 失敗：${error.message}" }
+            }
+        }.start()
+    }
+
+    private fun deleteSite(site: SiteOption) {
+        message = "正在刪除地盤..."
+        Thread {
+            try {
+                val body = JSONObject().put("siteId", site.id).toString()
+                val connection = URL("${baseUrl.trimEnd('/')}/api/mobile/delete-site").openConnection() as HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.doOutput = true
+                connection.connectTimeout = 30_000
+                connection.readTimeout = 30_000
+                connection.setRequestProperty("x-mobile-app-key", BuildConfig.MOBILE_APP_KEY)
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.outputStream.use { it.write(body.toByteArray()) }
+                val code = connection.responseCode
+                val response = responseText(connection, code)
+                if (code !in 200..299) throw IllegalStateException(errorMessage(response))
+                val loadedSites = parseSites(JSONObject(response).getJSONArray("sites"))
+                runOnUiThread {
+                    sites = loadedSites
+                    if (selectedSiteId == site.id) {
+                        selectedSiteId = ""
+                        selectedSiteName = ""
+                        saveSettings()
+                    }
+                    message = "已刪除地盤。"
+                }
+            } catch (error: Exception) {
+                runOnUiThread { message = "刪除失敗：${error.message}" }
+            }
+        }.start()
     }
 
     private fun uploadAllDrafts() {
-        saveSettings()
         if (!hasRequiredSettings()) return
-        val drafts = DraftStore.list(this)
-        if (drafts.isEmpty()) {
-            statusText.text = "未有待上傳檔案。"
+        val batch = DraftStore.list(this)
+        if (batch.isEmpty()) {
+            uploadStatus = "未有待上傳檔案。"
             return
         }
-        drafts.forEach { draft ->
-            val request = OneTimeWorkRequestBuilder<UploadWorker>()
-                .setInputData(
-                    Data.Builder()
-                        .putString("baseUrl", savedBaseUrl())
-                        .putString("pin", savedPin())
-                        .putString("draftId", draft.id)
-                        .build()
-                )
-                .build()
-            WorkManager.getInstance(this).enqueue(request)
-        }
-        statusText.text = "已開始背景上傳 ${drafts.size} 個檔案。"
+        isUploading = true
+        uploadStatus = "開始上傳 ${batch.size} 個檔案..."
+        Thread {
+            var completed = 0
+            val targets = linkedSetOf<String>()
+            batch.forEach { draft ->
+                try {
+                    val result = uploadDraft(draft)
+                    completed += 1
+                    DraftStore.removeUploaded(this, draft.id)
+                    val target = listOf(result.optString("siteName", draft.siteName), result.optString("folderName"))
+                        .filter { it.isNotBlank() }
+                        .joinToString(" / ")
+                    if (target.isNotBlank()) targets.add(target)
+                    runOnUiThread {
+                        refreshDrafts()
+                        uploadStatus = "已完成：$completed / ${batch.size}\n${targets.joinToString("\n")}"
+                    }
+                } catch (error: Exception) {
+                    DraftStore.markPending(this, draft.id)
+                    runOnUiThread {
+                        refreshDrafts()
+                        uploadStatus = "已完成：$completed / ${batch.size}\n失敗：${error.message}\n${targets.joinToString("\n")}"
+                    }
+                }
+            }
+            runOnUiThread {
+                isUploading = false
+                refreshDrafts()
+                uploadStatus = "已完成：$completed / ${batch.size}\n${targets.joinToString("\n")}"
+            }
+        }.start()
+    }
+
+    private fun uploadDraft(draft: UploadDraft): JSONObject {
+        val file = File(draft.filePath)
+        if (!file.exists()) throw IllegalStateException("檔案不存在。")
+        val query = listOf(
+            "siteId=${encode(draft.siteId)}",
+            "date=${encode(draft.date)}",
+            "remark=${encode(draft.remark)}",
+            "extension=${encode(draft.extension)}"
+        ).joinToString("&")
+        val connection = URL("${baseUrl.trimEnd('/')}/api/mobile/upload?$query").openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.connectTimeout = 30_000
+        connection.readTimeout = 180_000
+        connection.setRequestProperty("x-mobile-app-key", BuildConfig.MOBILE_APP_KEY)
+        connection.setRequestProperty("x-client-file-id", draft.id)
+        connection.setRequestProperty("Content-Type", draft.mimeType)
+        connection.setRequestProperty("Content-Length", file.length().toString())
+        file.inputStream().use { input -> connection.outputStream.use { output -> input.copyTo(output) } }
+        val code = connection.responseCode
+        val body = responseText(connection, code)
+        if (code !in 200..299) throw IllegalStateException(errorMessage(body))
+        return JSONObject(body)
+    }
+
+    private fun openEditor(draftId: String) {
+        editorLauncher.launch(Intent(this, EditActivity::class.java).putExtra("draftId", draftId))
+    }
+
+    private fun removeDraft(draftId: String) {
+        DraftStore.remove(this, draftId)
         refreshDrafts()
+        reviewIndex = reviewIndex.coerceAtMost((drafts.size - 1).coerceAtLeast(0))
+        if (drafts.isEmpty()) screen = Screen.Home
+    }
+
+    private fun refreshDrafts() {
+        drafts = DraftStore.list(this)
     }
 
     private fun hasRequiredSettings(): Boolean {
-        if (savedBaseUrl().isBlank()) {
-            statusText.text = "請先填 Render URL。"
+        if (baseUrl.isBlank()) {
+            message = "請先到進階設定填 Render URL。"
             return false
         }
-        if (savedPin().isBlank()) {
-            statusText.text = "請先填 WEB_ADMIN_PIN。"
-            return false
-        }
-        if (savedSiteId().isBlank()) {
-            statusText.text = "請先同步並選擇地盤。"
+        if (selectedSiteId.isBlank()) {
+            message = "請先同步並選擇地盤。"
             return false
         }
         return true
     }
 
-    private fun saveSettings() {
-        prefs().edit()
-            .putString("baseUrl", baseUrlInput.text.toString().trim())
-            .putString("pin", pinInput.text.toString().trim())
-            .putString("siteId", siteIdInput.text.toString().trim())
-            .putString("siteName", selectedSiteName)
-            .putString("date", apiDate(dateInput.text.toString()).ifBlank { todayString(0) })
-            .putString("remark", remarkInput.text.toString().trim())
-            .apply()
+    private fun parseSites(array: JSONArray): List<SiteOption> {
+        val result = mutableListOf<SiteOption>()
+        for (index in 0 until array.length()) {
+            val site = array.getJSONObject(index)
+            result.add(SiteOption(site.optString("id"), site.optString("name")))
+        }
+        return result.filter { it.id.isNotBlank() && it.name.isNotBlank() }
     }
 
-    private fun savedBaseUrl() = prefs().getString("baseUrl", "https://telegram-site-record-proxy.onrender.com").orEmpty()
-    private fun savedPin() = prefs().getString("pin", "").orEmpty()
-    private fun savedSiteId() = prefs().getString("siteId", "").orEmpty()
-    private fun savedDate() = prefs().getString("date", todayString(0)).orEmpty()
-    private fun savedRemark() = prefs().getString("remark", "").orEmpty()
+    private fun showDatePicker() {
+        val current = LocalDate.parse(recordDate)
+        DatePickerDialog(this, { _, year, month, day ->
+            setDate(LocalDate.of(year, month + 1, day).format(DateTimeFormatter.ISO_LOCAL_DATE))
+        }, current.year, current.monthValue - 1, current.dayOfMonth).show()
+    }
 
     private fun setDate(value: String) {
-        dateInput.setText(displayDate(value))
+        recordDate = value
         saveSettings()
-        refreshSummary()
-    }
-
-    private fun setRemark(value: String) {
-        remarkInput.setText(value)
-        saveSettings()
-        refreshSummary()
-    }
-
-    private fun refreshSummary() {
-        if (::currentSiteText.isInitialized) currentSiteText.text = "地盤\n${selectedSiteName.ifBlank { "未選擇" }}"
-        if (::folderText.isInitialized) folderText.text = "資料夾\n${folderNamePreview()}"
-        if (::syncText.isInitialized) syncText.text = "同步\n正常"
     }
 
     private fun folderNamePreview(): String {
-        val date = savedDate()
-        val remark = savedRemark()
-        return if (remark.isBlank()) date else "$date$remark"
+        return recordDate.replace("-", "") + remark
     }
 
-    private fun title(text: String) = TextView(this).apply {
-        this.text = text
-        textSize = 22f
-        setTextColor(Color.rgb(18, 30, 24))
-        setTypeface(null, android.graphics.Typeface.BOLD)
-        setPadding(0, 0, 0, dp(12))
+    private fun loadSettings() {
+        val prefs = prefs()
+        baseUrl = prefs.getString("baseUrl", baseUrl).orEmpty()
+        selectedSiteId = prefs.getString("siteId", "").orEmpty()
+        selectedSiteName = prefs.getString("siteName", "").orEmpty()
+        recordDate = prefs.getString("date", todayString(0)).orEmpty()
+        remark = prefs.getString("remark", "").orEmpty()
     }
 
-    private fun card(title: String): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(12), dp(12), dp(12))
-            background = android.graphics.drawable.GradientDrawable().apply {
-                setColor(Color.WHITE)
-                setStroke(1, Color.rgb(220, 228, 220))
-                cornerRadius = dp(8).toFloat()
-            }
-            addView(TextView(this@MainActivity).apply {
-                text = title
-                textSize = 17f
-                setTypeface(null, android.graphics.Typeface.BOLD)
-                setPadding(0, 0, 0, dp(8))
-            })
-        }.withMargins()
-    }
-
-    private fun LinearLayout.withMargins(): LinearLayout {
-        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            setMargins(0, 0, 0, dp(12))
-        }
-        return this
-    }
-
-    private fun metric(label: String, value: String) = TextView(this).apply {
-        text = "$label\n$value"
-        textSize = 17f
-        setTextColor(Color.rgb(20, 34, 27))
-        setPadding(dp(10), dp(8), dp(10), dp(8))
-        background = android.graphics.drawable.GradientDrawable().apply {
-            setColor(Color.WHITE)
-            setStroke(1, Color.rgb(220, 228, 220))
-            cornerRadius = dp(8).toFloat()
-        }
-    }
-
-    private fun edit(hint: String, value: String, inputTypeValue: Int) = EditText(this).apply {
-        this.hint = hint
-        setText(value)
-        inputType = inputTypeValue
-        setSingleLine(false)
-    }
-
-    private fun row(vararg views: View) = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        views.forEach {
-            addView(it, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                setMargins(dp(3), dp(4), dp(3), dp(4))
-            })
-        }
-    }
-
-    private fun button(label: String, primary: Boolean = false, danger: Boolean = false, action: () -> Unit): Button {
-        return Button(this).apply {
-            text = label
-            isAllCaps = false
-            setTextColor(if (primary) Color.WHITE else if (danger) Color.rgb(170, 35, 24) else Color.rgb(20, 92, 56))
-            setBackgroundColor(if (primary) Color.rgb(47, 143, 91) else if (danger) Color.rgb(255, 244, 242) else Color.rgb(223, 242, 231))
-            setOnClickListener { action() }
-        }
-    }
-
-    private fun cameraButton(label: String, action: () -> Unit) = Button(this).apply {
-        text = label
-        isAllCaps = false
-        setTextColor(Color.WHITE)
-        setBackgroundColor(Color.rgb(35, 35, 35))
-        setOnClickListener { action() }
-    }
-
-    private fun displayName(uri: Uri): String? {
-        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (cursor.moveToFirst() && index >= 0) return cursor.getString(index)
-        }
-        return null
+    private fun saveSettings() {
+        prefs().edit()
+            .putString("baseUrl", baseUrl.trim().trimEnd('/'))
+            .putString("siteId", selectedSiteId)
+            .putString("siteName", selectedSiteName)
+            .putString("date", recordDate)
+            .putString("remark", remark.trim())
+            .apply()
     }
 
     private fun prefs() = getSharedPreferences("settings", MODE_PRIVATE)
 
-    private fun showDatePicker() {
-        val current = parseDate(apiDate(dateInput.text.toString())) ?: LocalDate.now()
-        DatePickerDialog(this, { _, year, month, day ->
-            setDate(LocalDate.of(year, month + 1, day).format(DateTimeFormatter.BASIC_ISO_DATE))
-        }, current.year, current.monthValue - 1, current.dayOfMonth).show()
-    }
-
-    private fun todayString(offsetDays: Long) = LocalDate.now().plusDays(offsetDays).format(DateTimeFormatter.BASIC_ISO_DATE)
-
-    private fun displayDate(value: String): String {
-        return parseDate(value)?.format(ofPattern("dd/MM/yyyy")) ?: value
-    }
-
-    private fun apiDate(value: String): String {
-        val trimmed = value.trim()
-        parseDate(trimmed)?.let { return it.format(DateTimeFormatter.BASIC_ISO_DATE) }
-        return trimmed.replace("-", "").replace("/", "")
-    }
-
-    private fun parseDate(value: String): LocalDate? {
-        return try {
-            val digits = value.replace("-", "").replace("/", "")
-            LocalDate.parse(digits, DateTimeFormatter.BASIC_ISO_DATE)
-        } catch (_: Exception) {
-            null
-        }
+    private fun responseText(connection: HttpURLConnection, code: Int): String {
+        return (if (code in 200..299) connection.inputStream else connection.errorStream)
+            ?.bufferedReader()?.use { it.readText() }
+            .orEmpty()
     }
 
     private fun errorMessage(body: String): String {
-        return try {
-            JSONObject(body).optString("error", body).ifBlank { body }
-        } catch (_: Exception) {
-            body.ifBlank { "沒有錯誤內容" }
-        }
+        return runCatching { JSONObject(body).optString("error") }.getOrNull().takeUnless { it.isNullOrBlank() } ?: body
     }
 
-    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
-}
-
-enum class LensMode {
-    MAIN,
-    WIDE
+    private fun encode(value: String): String {
+        return URLEncoder.encode(value, Charsets.UTF_8.name())
+    }
 }
 
 object Camera2Id {
@@ -748,4 +1095,14 @@ object Camera2Id {
             null
         }
     }
+}
+
+private fun todayString(offsetDays: Long): String {
+    return LocalDate.now().plusDays(offsetDays).format(DateTimeFormatter.ISO_LOCAL_DATE)
+}
+
+private fun displayDate(value: String): String {
+    return runCatching {
+        LocalDate.parse(value).format(ofPattern("dd/MM/yyyy"))
+    }.getOrElse { value }
 }

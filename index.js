@@ -47,7 +47,7 @@ async function main() {
         sites,
         sync,
         ownerUserId: config.allowedTelegramUserIds[0],
-        adminPin: config.webAdminPin
+        mobileAppKey: config.mobileAppKey
     });
     await configureWebhook({
         app,
