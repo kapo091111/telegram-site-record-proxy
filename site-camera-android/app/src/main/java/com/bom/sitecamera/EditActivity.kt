@@ -15,6 +15,7 @@ import android.os.Bundle
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import java.io.File
 import kotlin.math.atan2
@@ -48,7 +49,8 @@ class EditActivity : Activity() {
             setPadding(8, 8, 8, 8)
             addView(button("裁剪") { editor.mode = EditMode.CROP })
             addView(button("旋轉") { editor.rotate90() })
-            addView(button("畫筆") { editor.mode = EditMode.LINE })
+            addView(button("畫筆") { editor.mode = EditMode.BRUSH })
+            addView(button("直線") { editor.mode = EditMode.LINE })
             addView(button("箭嘴") { editor.mode = EditMode.ARROW })
             addView(button("圈位") { editor.mode = EditMode.CIRCLE })
             addView(button("文字") { editor.mode = EditMode.TEXT })
@@ -61,7 +63,7 @@ class EditActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.BLACK)
             addView(editor, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-            addView(controls)
+            addView(HorizontalScrollView(this@EditActivity).apply { addView(controls) })
         }
         setContentView(root)
     }
@@ -85,6 +87,7 @@ class EditActivity : Activity() {
 }
 
 enum class EditMode {
+    BRUSH,
     LINE,
     ARROW,
     CIRCLE,
@@ -100,7 +103,8 @@ data class Shape(
     val startY: Float,
     val endX: Float,
     val endY: Float,
-    val text: String = ""
+    val text: String = "",
+    val points: List<Float> = emptyList()
 )
 
 class MarkupView(context: Activity, source: Bitmap) : View(context) {
@@ -140,7 +144,10 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
         canvas.clipRect(rect)
         (shapes + listOfNotNull(active)).forEach { drawShape(canvas, it, rect) }
         canvas.restore()
-        if (active != null && mode == EditMode.DIMENSION) drawMagnifier(canvas, rect)
+        if (active != null) {
+            drawReticle(canvas)
+            if (mode == EditMode.DIMENSION || mode == EditMode.CROP || mode == EditMode.TEXT) drawMagnifier(canvas, rect)
+        }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -150,8 +157,13 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
         activeScreenX = event.x
         activeScreenY = event.y
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> active = Shape(mode, imageX, imageY, imageX, imageY)
-            MotionEvent.ACTION_MOVE -> active = active?.copy(endX = imageX, endY = imageY)
+            MotionEvent.ACTION_DOWN -> active = Shape(mode, imageX, imageY, imageX, imageY, points = listOf(imageX, imageY))
+            MotionEvent.ACTION_MOVE -> {
+                active = active?.let {
+                    if (mode == EditMode.BRUSH) it.copy(endX = imageX, endY = imageY, points = it.points + listOf(imageX, imageY))
+                    else it.copy(endX = imageX, endY = imageY)
+                }
+            }
             MotionEvent.ACTION_UP -> {
                 val finished = active?.copy(endX = imageX, endY = imageY)
                 active = null
@@ -175,6 +187,7 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
             askText(shape)
             return
         }
+        if (shape.mode == EditMode.BRUSH && shape.points.size < 4) return
         shapes.add(shape)
     }
 
@@ -213,11 +226,12 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
         val top = (min(shape.startY, shape.endY) * bitmap.height).toInt()
         val right = (max(shape.startX, shape.endX) * bitmap.width).toInt()
         val bottom = (max(shape.startY, shape.endY) * bitmap.height).toInt()
-        val width = (right - left).coerceAtLeast(50)
-        val height = (bottom - top).coerceAtLeast(50)
-        if (left + width <= bitmap.width && top + height <= bitmap.height) {
+        val width = right - left
+        val height = bottom - top
+        if (width >= 80 && height >= 80 && left >= 0 && top >= 0 && right <= bitmap.width && bottom <= bitmap.height) {
             bitmap = Bitmap.createBitmap(bitmap, left, top, width, height)
             shapes.clear()
+            invalidate()
         }
     }
 
@@ -247,6 +261,7 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
         val ex = rect.left + shape.endX * rect.width()
         val ey = rect.top + shape.endY * rect.height()
         when (shape.mode) {
+            EditMode.BRUSH -> drawBrush(canvas, shape, rect)
             EditMode.LINE -> canvas.drawLine(sx, sy, ex, ey, paint)
             EditMode.ARROW -> drawArrow(canvas, sx, sy, ex, ey)
             EditMode.CIRCLE -> canvas.drawOval(RectF(min(sx, ex), min(sy, ey), max(sx, ex), max(sy, ey)), paint)
@@ -285,6 +300,18 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
                 canvas.drawRect(RectF(min(sx, ex), min(sy, ey), max(sx, ex), max(sy, ey)), fill)
             }
         }
+    }
+
+    private fun drawBrush(canvas: Canvas, shape: Shape, rect: RectF) {
+        if (shape.points.size < 4) return
+        val path = Path()
+        path.moveTo(rect.left + shape.points[0] * rect.width(), rect.top + shape.points[1] * rect.height())
+        var index = 2
+        while (index + 1 < shape.points.size) {
+            path.lineTo(rect.left + shape.points[index] * rect.width(), rect.top + shape.points[index + 1] * rect.height())
+            index += 2
+        }
+        canvas.drawPath(path, paint)
     }
 
     private fun drawArrow(canvas: Canvas, sx: Float, sy: Float, ex: Float, ey: Float) {
@@ -334,5 +361,17 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
         canvas.drawCircle(cx, cy, radius, border)
         canvas.drawLine(cx - 28f, cy, cx + 28f, cy, paint)
         canvas.drawLine(cx, cy - 28f, cx, cy + 28f, paint)
+    }
+
+    private fun drawReticle(canvas: Canvas) {
+        val guide = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 3f
+            color = Color.WHITE
+            alpha = 230
+        }
+        canvas.drawCircle(activeScreenX, activeScreenY, 22f, guide)
+        canvas.drawLine(activeScreenX - 34f, activeScreenY, activeScreenX + 34f, activeScreenY, guide)
+        canvas.drawLine(activeScreenX, activeScreenY - 34f, activeScreenX, activeScreenY + 34f, guide)
     }
 }

@@ -2,6 +2,7 @@ package com.bom.sitecamera
 
 import android.Manifest
 import android.app.DatePickerDialog
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
@@ -28,6 +29,7 @@ import androidx.camera.core.Preview
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -72,8 +74,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Path as ComposePath
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -108,6 +116,27 @@ private enum class LensMode {
     Tele
 }
 
+private enum class IconKind {
+    Menu,
+    Bell,
+    Cup,
+    Building,
+    Folder,
+    Document,
+    Sync,
+    Camera,
+    Image,
+    Drop,
+    Calendar,
+    Save,
+    Clear,
+    Upload,
+    Filter,
+    Home,
+    Settings,
+    Tag
+}
+
 private data class SiteOption(
     val id: String,
     val name: String
@@ -131,6 +160,8 @@ class MainActivity : ComponentActivity() {
     private var flashMode by mutableIntStateOf(ImageCapture.FLASH_MODE_OFF)
     private var lensMode by mutableStateOf(LensMode.Main)
     private var zoomValue by mutableFloatStateOf(0f)
+    private var showMenu by mutableStateOf(false)
+    private var showRemarkDialog by mutableStateOf(false)
 
     private lateinit var previewView: PreviewView
     private var imageCapture: ImageCapture? = null
@@ -160,6 +191,8 @@ class MainActivity : ComponentActivity() {
         if (result.resultCode == RESULT_OK && file.exists() && file.length() > 0) {
             DraftStore.add(this, file, "image/jpeg", "jpg", selectedSiteId, selectedSiteName, recordDate, remark)
             refreshDrafts()
+            reviewIndex = drafts.lastIndex.coerceAtLeast(0)
+            screen = Screen.Review
             message = "已用 HONOR 相機加入待上傳。"
         } else {
             file.delete()
@@ -206,8 +239,8 @@ class MainActivity : ComponentActivity() {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 18.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
                 HomeHeader()
@@ -228,6 +261,8 @@ class MainActivity : ComponentActivity() {
             item { BottomNavCard() }
         }
         if (showAdvanced) AdvancedDialog()
+        if (showMenu) MainMenuDialog()
+        if (showRemarkDialog) RemarkDialog()
     }
 
     @Composable
@@ -237,21 +272,21 @@ class MainActivity : ComponentActivity() {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            SoftSquare("☰") { message = "選單稍後加入。" }
+            SoftSquare(IconKind.Menu) { showMenu = true }
             Column(modifier = Modifier.weight(1f)) {
-                Text("工地現場記錄", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = ComposeColor(0xff2b1711))
-                Text("先揀好地盤、日期、備注，再影相或揀相。", color = ComposeColor(0xff7d7169), style = MaterialTheme.typography.bodyMedium)
+                Text("工地現場記錄", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = ComposeColor(0xff2b1711), maxLines = 1)
+                Text("先揀好地盤、日期、備注，再影相或揀相。", color = ComposeColor(0xff7d7169), style = MaterialTheme.typography.bodySmall, maxLines = 2)
             }
-            SoftSquare("🔔") { message = "暫時沒有新通知。" }
+            SoftSquare(IconKind.Bell) { message = "暫時沒有新通知。" }
         }
     }
 
     @Composable
     private fun SummaryCard() {
-        Panel("☕　今日概覽") {
+        Panel("今日概覽", IconKind.Cup) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 DashboardTile(
-                    icon = "▦",
+                    icon = IconKind.Building,
                     label = "地盤",
                     primary = sitePrimary(),
                     secondary = siteSecondary(),
@@ -259,7 +294,7 @@ class MainActivity : ComponentActivity() {
                     onClick = { message = "請在地盤選擇更改地盤。" }
                 )
                 DashboardTile(
-                    icon = "▣",
+                    icon = IconKind.Folder,
                     label = "資料夾",
                     primary = folderDateLabel(),
                     secondary = remark.ifBlank { "未設定備注" },
@@ -269,7 +304,7 @@ class MainActivity : ComponentActivity() {
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 DashboardTile(
-                    icon = "▤",
+                    icon = IconKind.Document,
                     label = "今日檔案",
                     primary = "${drafts.size} 個",
                     secondary = "待上傳",
@@ -277,7 +312,7 @@ class MainActivity : ComponentActivity() {
                     onClick = { if (drafts.isNotEmpty()) screen = Screen.Review }
                 )
                 DashboardTile(
-                    icon = "↻",
+                    icon = IconKind.Sync,
                     label = "同步狀態",
                     primary = if (isUploading) "上傳中" else "正常",
                     secondary = if (drafts.isEmpty()) "已整理" else "${drafts.size} 個待處理",
@@ -290,19 +325,19 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun QuickActionCard() {
-        Panel("⚡　快速操作") {
+        Panel("快速操作", IconKind.Tag) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                QuickAction("📷", "拍照上傳", Modifier.weight(1f)) { openCamera() }
-                QuickAction("▧", "相簿選取", Modifier.weight(1f)) { openGallery() }
-                QuickAction("💧", "泥水完成", Modifier.weight(1f)) { applyRemark("泥水完成") }
+                QuickAction(IconKind.Camera, "拍照上傳", Modifier.weight(1f)) { openCamera() }
+                QuickAction(IconKind.Image, "相簿選取", Modifier.weight(1f)) { openGallery() }
+                QuickAction(IconKind.Drop, remark.ifBlank { "檔案備注" }, Modifier.weight(1f)) { showRemarkDialog = true }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                QuickAction("▣", "選日期", Modifier.weight(1f)) { showDatePicker() }
-                QuickAction("⚙", "儲存設定", Modifier.weight(1f)) {
+                QuickAction(IconKind.Calendar, "選日期", Modifier.weight(1f)) { showDatePicker() }
+                QuickAction(IconKind.Save, "儲存設定", Modifier.weight(1f)) {
                     saveSettings()
                     message = "設定已儲存。"
                 }
-                QuickAction("🧹", "清除", Modifier.weight(1f), danger = true) {
+                QuickAction(IconKind.Clear, "清除", Modifier.weight(1f), danger = true) {
                     remark = ""
                     saveSettings()
                 }
@@ -316,14 +351,14 @@ class MainActivity : ComponentActivity() {
             val query = siteSearch.trim()
             query.isBlank() || site.name.contains(query, ignoreCase = true)
         }
-        Panel("▦　地盤選擇", trailing = "更改地盤 ›") {
-            Text("搜尋 25026 / 海怡 / 2401", color = ComposeColor(0xff7d7169), modifier = Modifier.padding(start = 58.dp))
+        Panel("地盤選擇", IconKind.Building, trailing = "更改地盤 ›") {
+            Text("搜尋 25026 / 海怡 / 2401", color = ComposeColor(0xff7d7169), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 42.dp))
             Spacer(Modifier.height(8.dp))
             SearchBox()
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 SoftButton("同步 Sheet", Modifier.weight(1f)) { syncSites() }
-                SoftButton("篩選", Modifier.weight(1f)) {
+                SoftButton("篩選", Modifier.weight(1f), icon = IconKind.Filter) {
                     message = "可直接在搜尋欄輸入地盤關鍵字。"
                 }
             }
@@ -361,7 +396,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun DraftCard() {
-        Panel("⇧　待上傳", trailing = "${drafts.size} 個檔案 ›") {
+        Panel("待上傳", IconKind.Upload, trailing = "${drafts.size} 個檔案 ›") {
             if (drafts.isEmpty()) {
                 Text("暫時未有待上傳相片。", color = ComposeColor(0xff7d7169))
             } else {
@@ -386,10 +421,16 @@ class MainActivity : ComponentActivity() {
                     colors = brownButton(),
                     shape = RoundedCornerShape(16.dp)
                 ) {
-                    Text(if (isUploading) "上傳中" else "☁　上傳全部")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        LineIcon(IconKind.Upload, ComposeColor.White, Modifier.size(20.dp))
+                        Text(if (isUploading) "上傳中" else "上傳全部")
+                    }
                 }
                 OutlinedButton(onClick = { refreshDrafts() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(16.dp)) {
-                    Text("↻　重新整理", color = ComposeColor(0xff5a4034))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        LineIcon(IconKind.Sync, ComposeColor(0xff5a4034), Modifier.size(20.dp))
+                        Text("重新整理", color = ComposeColor(0xff5a4034))
+                    }
                 }
             }
         }
@@ -550,6 +591,76 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun MainMenuDialog() {
+        AlertDialog(
+            onDismissRequest = { showMenu = false },
+            title = { Text("選單") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SoftButton("同步 Sheet") {
+                        showMenu = false
+                        syncSites()
+                    }
+                    SoftButton("選日期") {
+                        showMenu = false
+                        showDatePicker()
+                    }
+                    SoftButton("檔案備注") {
+                        showMenu = false
+                        showRemarkDialog = true
+                    }
+                    SoftButton("進階設定") {
+                        showMenu = false
+                        showAdvanced = true
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showMenu = false }) { Text("關閉") }
+            }
+        )
+    }
+
+    @Composable
+    private fun RemarkDialog() {
+        var customRemark by mutableStateOf(remark)
+        AlertDialog(
+            onDismissRequest = { showRemarkDialog = false },
+            title = { Text("檔案備注") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("之後拍攝或選取的檔案會放入：${folderNamePreview()}", color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        SoftButton("打拆", Modifier.weight(1f)) { customRemark = "打拆" }
+                        SoftButton("水電完成", Modifier.weight(1f)) { customRemark = "水電完成" }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        SoftButton("泥水完成", Modifier.weight(1f)) { customRemark = "泥水完成" }
+                        SoftButton("清除", Modifier.weight(1f)) { customRemark = "" }
+                    }
+                    OutlinedTextField(
+                        value = customRemark,
+                        onValueChange = { customRemark = it },
+                        label = { Text("自訂備注") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    applyRemark(customRemark)
+                    showRemarkDialog = false
+                    message = "檔案備注已設定：${remark.ifBlank { "無" }}"
+                }) { Text("套用") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRemarkDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    @Composable
     private fun AdvancedDialog() {
         var draftBaseUrl by mutableStateOf(baseUrl)
         AlertDialog(
@@ -581,7 +692,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Panel(title: String, trailing: String = "", content: @Composable () -> Unit) {
+    private fun Panel(title: String, icon: IconKind, trailing: String = "", content: @Composable () -> Unit) {
         Card(
             colors = CardDefaults.cardColors(containerColor = ComposeColor(0xeeffffff)),
             shape = RoundedCornerShape(24.dp),
@@ -589,6 +700,8 @@ class MainActivity : ComponentActivity() {
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                LineIcon(icon, ComposeColor(0xffa96644), Modifier.size(26.dp))
+                    Spacer(Modifier.width(10.dp))
                     Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge, color = ComposeColor(0xff2b1711), modifier = Modifier.weight(1f))
                     if (trailing.isNotBlank()) {
                         Text(trailing, color = ComposeColor(0xffa56343), style = MaterialTheme.typography.bodyMedium)
@@ -601,7 +714,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun DashboardTile(
-        icon: String,
+        icon: IconKind,
         label: String,
         primary: String,
         secondary: String,
@@ -610,38 +723,38 @@ class MainActivity : ComponentActivity() {
     ) {
         Row(
             modifier = modifier
-                .height(96.dp)
+                .height(82.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(ComposeColor.White)
                 .border(1.dp, ComposeColor(0xffeee4dc), RoundedCornerShape(16.dp))
                 .clickable { onClick() }
-                .padding(12.dp),
+                .padding(9.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .size(54.dp)
+                    .size(40.dp)
                     .clip(CircleShape)
                     .background(ComposeColor(0xfff6eee8)),
                 contentAlignment = Alignment.Center
             ) {
-                Text(icon, color = ComposeColor(0xffb87856), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+                LineIcon(icon, ComposeColor(0xffb87856), Modifier.size(23.dp))
             }
             Column(modifier = Modifier.weight(1f)) {
-                Text(label, color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.labelLarge)
-                Text(primary, color = ComposeColor(0xff2b1711), fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(secondary, color = ComposeColor(0xff6f625b), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(label, color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                Text(primary, color = ComposeColor(0xff2b1711), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(secondary, color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Text("›", color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.headlineSmall)
         }
     }
 
     @Composable
-    private fun QuickAction(icon: String, label: String, modifier: Modifier = Modifier, danger: Boolean = false, onClick: () -> Unit) {
+    private fun QuickAction(icon: IconKind, label: String, modifier: Modifier = Modifier, danger: Boolean = false, onClick: () -> Unit) {
         Column(
             modifier = modifier
-                .aspectRatio(1f)
+                .height(78.dp)
                 .clip(RoundedCornerShape(18.dp))
                 .background(ComposeColor.White)
                 .border(1.dp, ComposeColor(0xfff0e7df), RoundedCornerShape(18.dp))
@@ -650,14 +763,14 @@ class MainActivity : ComponentActivity() {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text(icon, style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.height(6.dp))
-            Text(label, color = if (danger) ComposeColor(0xffd44b40) else ComposeColor(0xff3f2b22), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            LineIcon(icon, if (danger) ComposeColor(0xffd44b40) else ComposeColor(0xffa96644), Modifier.size(27.dp))
+            Spacer(Modifier.height(4.dp))
+            Text(label, color = if (danger) ComposeColor(0xffd44b40) else ComposeColor(0xff3f2b22), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 
     @Composable
-    private fun SoftSquare(label: String, onClick: () -> Unit) {
+    private fun SoftSquare(icon: IconKind, onClick: () -> Unit) {
         Box(
             modifier = Modifier
                 .size(56.dp)
@@ -666,7 +779,7 @@ class MainActivity : ComponentActivity() {
                 .clickable { onClick() },
             contentAlignment = Alignment.Center
         ) {
-            Text(label, color = ComposeColor(0xff5a4034), style = MaterialTheme.typography.headlineSmall)
+            LineIcon(icon, ComposeColor(0xff5a4034), Modifier.size(30.dp))
         }
     }
 
@@ -695,21 +808,21 @@ class MainActivity : ComponentActivity() {
                     .padding(vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                BottomNavItem("⌂", "首頁", active = true) { screen = Screen.Home }
-                BottomNavItem("▤", "記錄") { if (drafts.isNotEmpty()) screen = Screen.Review }
-                BottomNavItem("▧", "相簿") { openGallery() }
-                BottomNavItem("⚙", "設定") { showAdvanced = true }
+                BottomNavItem(IconKind.Home, "首頁", active = true) { screen = Screen.Home }
+                BottomNavItem(IconKind.Document, "記錄") { if (drafts.isNotEmpty()) screen = Screen.Review }
+                BottomNavItem(IconKind.Image, "相簿") { openGallery() }
+                BottomNavItem(IconKind.Settings, "設定") { showAdvanced = true }
             }
         }
     }
 
     @Composable
-    private fun BottomNavItem(icon: String, label: String, active: Boolean = false, onClick: () -> Unit) {
+    private fun BottomNavItem(icon: IconKind, label: String, active: Boolean = false, onClick: () -> Unit) {
         Column(
             modifier = Modifier.clickable { onClick() },
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(icon, color = if (active) ComposeColor(0xffc07652) else ComposeColor(0xff5f5651), style = MaterialTheme.typography.headlineSmall)
+            LineIcon(icon, if (active) ComposeColor(0xffc07652) else ComposeColor(0xff5f5651), Modifier.size(26.dp))
             Text(label, color = if (active) ComposeColor(0xffc07652) else ComposeColor(0xff5f5651), style = MaterialTheme.typography.bodySmall)
         }
     }
@@ -746,14 +859,102 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun SoftButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    private fun SoftButton(label: String, modifier: Modifier = Modifier, icon: IconKind? = null, onClick: () -> Unit) {
         Button(
             onClick = onClick,
             modifier = modifier,
             colors = ButtonDefaults.buttonColors(containerColor = ComposeColor(0xfff1e9df), contentColor = ComposeColor(0xff5a4034)),
             shape = RoundedCornerShape(14.dp)
         ) {
+            if (icon != null) {
+                LineIcon(icon, ComposeColor(0xff5a4034), Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+            }
             Text(label)
+        }
+    }
+
+    @Composable
+    private fun LineIcon(kind: IconKind, color: ComposeColor, modifier: Modifier = Modifier) {
+        Canvas(modifier = modifier) {
+            val w = size.width
+            val h = size.height
+            val s = minOf(w, h)
+            val sw = (s * 0.085f).coerceAtLeast(2.2f)
+            fun p(x: Float, y: Float) = Offset(w * x, h * y)
+            fun line(a: Offset, b: Offset) = drawLine(color, a, b, strokeWidth = sw, cap = StrokeCap.Round)
+            fun rect(x: Float, y: Float, rw: Float, rh: Float) = drawRoundRect(
+                color = color,
+                topLeft = Offset(w * x, h * y),
+                size = Size(w * rw, h * rh),
+                cornerRadius = CornerRadius(s * 0.08f, s * 0.08f),
+                style = Stroke(sw)
+            )
+            when (kind) {
+                IconKind.Menu -> {
+                    line(p(0.25f, 0.32f), p(0.75f, 0.32f)); line(p(0.25f, 0.50f), p(0.75f, 0.50f)); line(p(0.25f, 0.68f), p(0.75f, 0.68f))
+                }
+                IconKind.Bell -> {
+                    drawArc(color, 205f, 130f, false, topLeft = Offset(w * .24f, h * .2f), size = Size(w * .52f, h * .6f), style = Stroke(sw, cap = StrokeCap.Round))
+                    line(p(.25f, .72f), p(.75f, .72f)); line(p(.45f, .83f), p(.55f, .83f))
+                    drawCircle(ComposeColor(0xffef5350), s * .08f, p(.78f, .22f))
+                }
+                IconKind.Cup -> {
+                    rect(.22f, .34f, .42f, .3f); drawArc(color, -70f, 210f, false, topLeft = Offset(w * .55f, h * .37f), size = Size(w * .24f, h * .22f), style = Stroke(sw, cap = StrokeCap.Round)); line(p(.22f, .74f), p(.7f, .74f))
+                }
+                IconKind.Building -> {
+                    rect(.28f, .18f, .38f, .66f); line(p(.18f, .84f), p(.78f, .84f))
+                    listOf(.38f, .52f).forEach { x -> listOf(.32f, .48f, .64f).forEach { y -> drawCircle(color, sw * .55f, p(x, y)) } }
+                }
+                IconKind.Folder -> {
+                    val path = ComposePath().apply { moveTo(w*.15f,h*.35f); lineTo(w*.38f,h*.35f); lineTo(w*.45f,h*.45f); lineTo(w*.85f,h*.45f); lineTo(w*.85f,h*.78f); lineTo(w*.15f,h*.78f); close() }
+                    drawPath(path, color, style = Stroke(sw, cap = StrokeCap.Round))
+                }
+                IconKind.Document -> {
+                    rect(.28f, .16f, .44f, .68f); line(p(.4f, .42f), p(.62f, .42f)); line(p(.4f, .55f), p(.62f, .55f)); line(p(.4f, .68f), p(.58f, .68f))
+                }
+                IconKind.Sync -> {
+                    drawArc(color, 35f, 250f, false, topLeft = Offset(w*.18f,h*.18f), size = Size(w*.64f,h*.64f), style = Stroke(sw, cap = StrokeCap.Round))
+                    line(p(.72f,.18f), p(.82f,.36f)); line(p(.72f,.18f), p(.55f,.2f))
+                    drawCircle(ComposeColor(0xff4d9a68), s*.11f, p(.72f,.68f))
+                }
+                IconKind.Camera -> {
+                    rect(.18f, .32f, .64f, .42f); line(p(.32f,.32f), p(.39f,.22f)); line(p(.39f,.22f), p(.58f,.22f)); line(p(.58f,.22f), p(.65f,.32f)); drawCircle(color, s*.15f, p(.5f,.53f), style = Stroke(sw))
+                }
+                IconKind.Image -> {
+                    rect(.16f,.2f,.68f,.56f); drawCircle(color, s*.06f, p(.66f,.34f)); line(p(.24f,.66f), p(.42f,.48f)); line(p(.42f,.48f), p(.56f,.62f)); line(p(.56f,.62f), p(.72f,.46f))
+                }
+                IconKind.Drop -> {
+                    val path = ComposePath().apply { moveTo(w*.5f,h*.12f); cubicTo(w*.28f,h*.38f,w*.25f,h*.55f,w*.5f,h*.82f); cubicTo(w*.75f,h*.55f,w*.72f,h*.38f,w*.5f,h*.12f) }
+                    drawPath(path, color, style = Stroke(sw, cap = StrokeCap.Round))
+                }
+                IconKind.Calendar -> {
+                    rect(.18f,.25f,.64f,.58f); line(p(.18f,.42f), p(.82f,.42f)); line(p(.34f,.16f), p(.34f,.32f)); line(p(.66f,.16f), p(.66f,.32f))
+                }
+                IconKind.Save -> {
+                    rect(.22f,.16f,.56f,.68f); rect(.34f,.2f,.28f,.22f); line(p(.34f,.72f), p(.66f,.72f))
+                }
+                IconKind.Clear -> {
+                    line(p(.25f,.25f), p(.75f,.75f)); line(p(.75f,.25f), p(.25f,.75f)); rect(.2f,.2f,.6f,.6f)
+                }
+                IconKind.Upload -> {
+                    line(p(.5f,.72f), p(.5f,.22f)); line(p(.32f,.4f), p(.5f,.22f)); line(p(.68f,.4f), p(.5f,.22f)); line(p(.24f,.78f), p(.76f,.78f))
+                }
+                IconKind.Filter -> {
+                    line(p(.22f,.3f), p(.78f,.3f)); line(p(.34f,.5f), p(.66f,.5f)); line(p(.45f,.7f), p(.55f,.7f))
+                }
+                IconKind.Home -> {
+                    line(p(.2f,.48f), p(.5f,.22f)); line(p(.5f,.22f), p(.8f,.48f)); rect(.3f,.48f,.4f,.32f)
+                }
+                IconKind.Settings -> {
+                    drawCircle(color, s*.25f, p(.5f,.5f), style = Stroke(sw)); drawCircle(color, s*.08f, p(.5f,.5f), style = Stroke(sw))
+                    line(p(.5f,.1f), p(.5f,.22f)); line(p(.5f,.78f), p(.5f,.9f)); line(p(.1f,.5f), p(.22f,.5f)); line(p(.78f,.5f), p(.9f,.5f))
+                }
+                IconKind.Tag -> {
+                    val path = ComposePath().apply { moveTo(w*.28f,h*.2f); lineTo(w*.7f,h*.2f); lineTo(w*.82f,h*.32f); lineTo(w*.42f,h*.78f); lineTo(w*.18f,h*.54f); close() }
+                    drawPath(path, color, style = Stroke(sw, cap = StrokeCap.Round)); drawCircle(color, s*.04f, p(.62f,.33f))
+                }
+            }
         }
     }
 
@@ -859,7 +1060,7 @@ class MainActivity : ComponentActivity() {
     private fun openCamera() {
         if (!hasRequiredSettings()) return
         saveSettings()
-        screen = Screen.Camera
+        openSystemCamera()
     }
 
     private fun requestCameraPermission() {
@@ -986,12 +1187,20 @@ class MainActivity : ComponentActivity() {
 
     private fun openGallery() {
         if (!hasRequiredSettings()) return
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+        val photoPicker = Intent(MediaStore.ACTION_PICK_IMAGES).apply {
+            type = "image/*"
+            putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 50)
+        }
+        val fallback = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "*/*"
+            type = "image/*"
             putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
         }
-        galleryPicker.launch(intent)
+        try {
+            galleryPicker.launch(if (photoPicker.resolveActivity(packageManager) != null) photoPicker else fallback)
+        } catch (_: ActivityNotFoundException) {
+            galleryPicker.launch(fallback)
+        }
     }
 
     private fun copyUriToDraft(uri: Uri) {
