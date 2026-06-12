@@ -1061,7 +1061,8 @@ class MainActivity : ComponentActivity() {
     private fun openCamera() {
         if (!hasRequiredSettings()) return
         saveSettings()
-        openSystemCamera()
+        screen = Screen.Camera
+        message = ""
     }
 
     private fun requestCameraPermission() {
