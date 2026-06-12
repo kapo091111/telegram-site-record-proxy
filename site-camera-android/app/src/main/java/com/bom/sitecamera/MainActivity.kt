@@ -191,7 +191,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun SiteCameraApp() {
         MaterialTheme {
-            Surface(color = ComposeColor(0xfff4f6f2), modifier = Modifier.fillMaxSize()) {
+            Surface(color = ComposeColor(0xfffaf7f2), modifier = Modifier.fillMaxSize()) {
                 when (screen) {
                     Screen.Home -> HomeScreen()
                     Screen.Camera -> CameraScreen()
@@ -206,15 +206,14 @@ class MainActivity : ComponentActivity() {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(horizontal = 18.dp, vertical = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
-                Text("工程現場記錄", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text("選好設定後直接拍照，完成後一次過上傳。", color = ComposeColor(0xff64706a))
+                HomeHeader()
             }
             item { SummaryCard() }
-            item { ActionCard() }
+            item { QuickActionCard() }
             item { SiteCard() }
             item { DraftCard() }
             if (message.isNotBlank() || uploadStatus.isNotBlank()) {
@@ -226,62 +225,86 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+            item { BottomNavCard() }
         }
         if (showAdvanced) AdvancedDialog()
     }
 
     @Composable
-    private fun SummaryCard() {
-        Panel("目前設定") {
-            InfoTile("地盤", selectedSiteName.ifBlank { "未選擇" })
-            InfoTile("資料夾", folderNamePreview())
-            InfoTile("待上傳", "${drafts.size} 個檔案")
-            InfoTile("同步", if (isUploading) "上傳中" else "正常")
+    private fun HomeHeader() {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            SoftSquare("☰") { message = "選單稍後加入。" }
+            Column(modifier = Modifier.weight(1f)) {
+                Text("工地現場記錄", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = ComposeColor(0xff2b1711))
+                Text("先揀好地盤、日期、備注，再影相或揀相。", color = ComposeColor(0xff7d7169), style = MaterialTheme.typography.bodyMedium)
+            }
+            SoftSquare("🔔") { message = "暫時沒有新通知。" }
         }
     }
 
     @Composable
-    private fun ActionCard() {
-        Panel("拍攝設定") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(onClick = { showDatePicker() }, modifier = Modifier.weight(1f)) {
-                    Text(displayDate(recordDate))
-                }
-                SoftButton("今日", Modifier.weight(1f)) { setDate(todayString(0)) }
-                SoftButton("昨日", Modifier.weight(1f)) { setDate(todayString(-1)) }
+    private fun SummaryCard() {
+        Panel("☕　今日概覽") {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                DashboardTile(
+                    icon = "▦",
+                    label = "地盤",
+                    primary = sitePrimary(),
+                    secondary = siteSecondary(),
+                    modifier = Modifier.weight(1f),
+                    onClick = { message = "請在地盤選擇更改地盤。" }
+                )
+                DashboardTile(
+                    icon = "▣",
+                    label = "資料夾",
+                    primary = folderDateLabel(),
+                    secondary = remark.ifBlank { "未設定備注" },
+                    modifier = Modifier.weight(1f),
+                    onClick = { showDatePicker() }
+                )
             }
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                RemarkButton("打拆", Modifier.weight(1f))
-                RemarkButton("水電完成", Modifier.weight(1f))
-                RemarkButton("泥水完成", Modifier.weight(1f))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                DashboardTile(
+                    icon = "▤",
+                    label = "今日檔案",
+                    primary = "${drafts.size} 個",
+                    secondary = "待上傳",
+                    modifier = Modifier.weight(1f),
+                    onClick = { if (drafts.isNotEmpty()) screen = Screen.Review }
+                )
+                DashboardTile(
+                    icon = "↻",
+                    label = "同步狀態",
+                    primary = if (isUploading) "上傳中" else "正常",
+                    secondary = if (drafts.isEmpty()) "已整理" else "${drafts.size} 個待處理",
+                    modifier = Modifier.weight(1f),
+                    onClick = { refreshDrafts() }
+                )
             }
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = remark,
-                onValueChange = {
-                    remark = it.trim()
+        }
+    }
+
+    @Composable
+    private fun QuickActionCard() {
+        Panel("⚡　快速操作") {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                QuickAction("📷", "拍照上傳", Modifier.weight(1f)) { openCamera() }
+                QuickAction("▧", "相簿選取", Modifier.weight(1f)) { openGallery() }
+                QuickAction("💧", "泥水完成", Modifier.weight(1f)) { applyRemark("泥水完成") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                QuickAction("▣", "選日期", Modifier.weight(1f)) { showDatePicker() }
+                QuickAction("⚙", "儲存設定", Modifier.weight(1f)) {
                     saveSettings()
-                },
-                label = { Text("備注") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = { openCamera() }, modifier = Modifier.weight(1f), colors = greenButton()) {
-                    Text("拍照")
+                    message = "設定已儲存。"
                 }
-                OutlinedButton(onClick = { openGallery() }, modifier = Modifier.weight(1f)) {
-                    Text("相簿")
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(onClick = { screen = Screen.Review }, modifier = Modifier.weight(1f), enabled = drafts.isNotEmpty()) {
-                    Text("查看待上傳")
-                }
-                TextButton(onClick = { showAdvanced = true }, modifier = Modifier.weight(1f)) {
-                    Text("進階設定")
+                QuickAction("🧹", "清除", Modifier.weight(1f), danger = true) {
+                    remark = ""
+                    saveSettings()
                 }
             }
         }
@@ -293,19 +316,15 @@ class MainActivity : ComponentActivity() {
             val query = siteSearch.trim()
             query.isBlank() || site.name.contains(query, ignoreCase = true)
         }
-        Panel("地盤") {
-            OutlinedTextField(
-                value = siteSearch,
-                onValueChange = { siteSearch = it },
-                label = { Text("搜尋 25026 / 海怡 / 2401") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+        Panel("▦　地盤選擇", trailing = "更改地盤 ›") {
+            Text("搜尋 25026 / 海怡 / 2401", color = ComposeColor(0xff7d7169), modifier = Modifier.padding(start = 58.dp))
+            Spacer(Modifier.height(8.dp))
+            SearchBox()
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 SoftButton("同步 Sheet", Modifier.weight(1f)) { syncSites() }
-                OutlinedButton(onClick = { fetchState() }, modifier = Modifier.weight(1f)) {
-                    Text("重新整理")
+                SoftButton("篩選", Modifier.weight(1f)) {
+                    message = "可直接在搜尋欄輸入地盤關鍵字。"
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -342,9 +361,9 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun DraftCard() {
-        Panel("待上傳") {
+        Panel("⇧　待上傳", trailing = "${drafts.size} 個檔案 ›") {
             if (drafts.isEmpty()) {
-                Text("未有待上傳檔案。", color = ComposeColor(0xff64706a))
+                Text("暫時未有待上傳相片。", color = ComposeColor(0xff7d7169))
             } else {
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -364,12 +383,13 @@ class MainActivity : ComponentActivity() {
                     onClick = { uploadAllDrafts() },
                     enabled = drafts.isNotEmpty() && !isUploading,
                     modifier = Modifier.weight(1f),
-                    colors = greenButton()
+                    colors = brownButton(),
+                    shape = RoundedCornerShape(16.dp)
                 ) {
-                    Text(if (isUploading) "上傳中" else "上傳全部")
+                    Text(if (isUploading) "上傳中" else "☁　上傳全部")
                 }
-                OutlinedButton(onClick = { refreshDrafts() }, modifier = Modifier.weight(1f)) {
-                    Text("重新整理")
+                OutlinedButton(onClick = { refreshDrafts() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(16.dp)) {
+                    Text("↻　重新整理", color = ComposeColor(0xff5a4034))
                 }
             }
         }
@@ -561,16 +581,136 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Panel(title: String, content: @Composable () -> Unit) {
+    private fun Panel(title: String, trailing: String = "", content: @Composable () -> Unit) {
         Card(
-            colors = CardDefaults.cardColors(containerColor = ComposeColor.White),
-            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = ComposeColor(0xeeffffff)),
+            shape = RoundedCornerShape(24.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge, color = ComposeColor(0xff2b1711), modifier = Modifier.weight(1f))
+                    if (trailing.isNotBlank()) {
+                        Text(trailing, color = ComposeColor(0xffa56343), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
                 content()
             }
+        }
+    }
+
+    @Composable
+    private fun DashboardTile(
+        icon: String,
+        label: String,
+        primary: String,
+        secondary: String,
+        modifier: Modifier = Modifier,
+        onClick: () -> Unit
+    ) {
+        Row(
+            modifier = modifier
+                .height(96.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(ComposeColor.White)
+                .border(1.dp, ComposeColor(0xffeee4dc), RoundedCornerShape(16.dp))
+                .clickable { onClick() }
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(54.dp)
+                    .clip(CircleShape)
+                    .background(ComposeColor(0xfff6eee8)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(icon, color = ComposeColor(0xffb87856), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(label, color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.labelLarge)
+                Text(primary, color = ComposeColor(0xff2b1711), fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(secondary, color = ComposeColor(0xff6f625b), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Text("›", color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.headlineSmall)
+        }
+    }
+
+    @Composable
+    private fun QuickAction(icon: String, label: String, modifier: Modifier = Modifier, danger: Boolean = false, onClick: () -> Unit) {
+        Column(
+            modifier = modifier
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(18.dp))
+                .background(ComposeColor.White)
+                .border(1.dp, ComposeColor(0xfff0e7df), RoundedCornerShape(18.dp))
+                .clickable { onClick() }
+                .padding(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(icon, style = MaterialTheme.typography.headlineMedium)
+            Spacer(Modifier.height(6.dp))
+            Text(label, color = if (danger) ComposeColor(0xffd44b40) else ComposeColor(0xff3f2b22), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+
+    @Composable
+    private fun SoftSquare(label: String, onClick: () -> Unit) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(ComposeColor.White)
+                .clickable { onClick() },
+            contentAlignment = Alignment.Center
+        ) {
+            Text(label, color = ComposeColor(0xff5a4034), style = MaterialTheme.typography.headlineSmall)
+        }
+    }
+
+    @Composable
+    private fun SearchBox() {
+        OutlinedTextField(
+            value = siteSearch,
+            onValueChange = { siteSearch = it },
+            label = { Text("搜尋地盤") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp)
+        )
+    }
+
+    @Composable
+    private fun BottomNavCard() {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = ComposeColor(0xeeffffff)),
+            shape = RoundedCornerShape(22.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                BottomNavItem("⌂", "首頁", active = true) { screen = Screen.Home }
+                BottomNavItem("▤", "記錄") { if (drafts.isNotEmpty()) screen = Screen.Review }
+                BottomNavItem("▧", "相簿") { openGallery() }
+                BottomNavItem("⚙", "設定") { showAdvanced = true }
+            }
+        }
+    }
+
+    @Composable
+    private fun BottomNavItem(icon: String, label: String, active: Boolean = false, onClick: () -> Unit) {
+        Column(
+            modifier = Modifier.clickable { onClick() },
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(icon, color = if (active) ComposeColor(0xffc07652) else ComposeColor(0xff5f5651), style = MaterialTheme.typography.headlineSmall)
+            Text(label, color = if (active) ComposeColor(0xffc07652) else ComposeColor(0xff5f5651), style = MaterialTheme.typography.bodySmall)
         }
     }
 
@@ -610,7 +750,8 @@ class MainActivity : ComponentActivity() {
         Button(
             onClick = onClick,
             modifier = modifier,
-            colors = ButtonDefaults.buttonColors(containerColor = ComposeColor(0xffdff2e7), contentColor = ComposeColor(0xff145b38))
+            colors = ButtonDefaults.buttonColors(containerColor = ComposeColor(0xfff1e9df), contentColor = ComposeColor(0xff5a4034)),
+            shape = RoundedCornerShape(14.dp)
         ) {
             Text(label)
         }
@@ -691,6 +832,29 @@ class MainActivity : ComponentActivity() {
         containerColor = ComposeColor(0xff2f8f5b),
         contentColor = ComposeColor.White
     )
+
+    @Composable
+    private fun brownButton() = ButtonDefaults.buttonColors(
+        containerColor = ComposeColor(0xffc47a54),
+        contentColor = ComposeColor.White
+    )
+
+    private fun sitePrimary(): String {
+        val site = selectedSiteName.ifBlank { return "未選擇" }
+        return site.substringBefore(' ').take(14)
+    }
+
+    private fun siteSecondary(): String {
+        val site = selectedSiteName.ifBlank { return "請先選地盤" }
+        return site.substringAfter(' ', "")
+            .ifBlank { site.takeLast(12) }
+    }
+
+    private fun folderDateLabel(): String {
+        return runCatching {
+            LocalDate.parse(recordDate).format(ofPattern("ddMMyyyy"))
+        }.getOrElse { recordDate.replace("-", "") }
+    }
 
     private fun openCamera() {
         if (!hasRequiredSettings()) return
@@ -1044,6 +1208,11 @@ class MainActivity : ComponentActivity() {
 
     private fun setDate(value: String) {
         recordDate = value
+        saveSettings()
+    }
+
+    private fun applyRemark(value: String) {
+        remark = value
         saveSettings()
     }
 
