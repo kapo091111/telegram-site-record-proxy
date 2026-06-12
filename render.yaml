@@ -1,8 +1,8 @@
 services:
   - type: web
-    name: telegram-site-record-bot
+    name: telegram-site-record-proxy
     runtime: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm ci
     startCommand: npm start
     healthCheckPath: /healthz

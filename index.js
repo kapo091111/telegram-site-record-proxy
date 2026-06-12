@@ -32,6 +32,13 @@ async function main() {
     });
     const app = express();
     app.get('/healthz', (_req, res) => res.send('ok'));
+    app.get('/version', (_req, res) => {
+        res.json({
+            service: 'telegram-site-record-proxy',
+            mobileAuth: 'x-mobile-app-key',
+            gitCommit: process.env.RENDER_GIT_COMMIT || process.env.RENDER_COMMIT || null
+        });
+    });
     configureAdminApp({
         app,
         db,
