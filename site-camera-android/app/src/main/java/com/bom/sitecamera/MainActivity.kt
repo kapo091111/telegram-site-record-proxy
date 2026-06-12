@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -85,6 +86,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -267,60 +269,63 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun HomeHeader() {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            SoftSquare(IconKind.Menu) { showMenu = true }
-            Column(modifier = Modifier.weight(1f)) {
-                Text("地盤記錄", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = ComposeColor(0xff2b1711), maxLines = 1)
-                Text("先揀好地盤、日期、備注。", color = ComposeColor(0xff7d7169), style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                Text("再影相或揀相。", color = ComposeColor(0xff7d7169), style = MaterialTheme.typography.bodySmall, maxLines = 1)
+            Text(
+                "地盤記錄",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = ComposeColor(0xff2b1711),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                "先揀好地盤、日期、備注。\n再影相或揀相。",
+                color = ComposeColor(0xff7d7169),
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
+                SoftSquare(IconKind.Menu) { showMenu = true }
             }
-            SoftSquare(IconKind.Bell) { message = "暫時沒有新通知。" }
         }
     }
 
     @Composable
     private fun SummaryCard() {
         Panel("今日概覽", IconKind.Cup) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                DashboardTile(
-                    icon = IconKind.Building,
-                    label = "地盤",
-                    primary = selectedSiteName.ifBlank { "未選擇地盤" },
-                    secondary = siteSecondary(),
-                    modifier = Modifier.weight(1f),
-                    onClick = { message = "請在地盤選擇更改地盤。" }
-                )
-                DashboardTile(
-                    icon = IconKind.Folder,
-                    label = "資料夾",
-                    primary = folderDateLabel(),
-                    secondary = remark.ifBlank { "未設定備注" },
-                    modifier = Modifier.weight(1f),
-                    onClick = { showDatePicker() }
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                DashboardTile(
-                    icon = IconKind.Document,
-                    label = "今日檔案",
-                    primary = "${drafts.size} 個",
-                    secondary = "待上傳",
-                    modifier = Modifier.weight(1f),
-                    onClick = { if (drafts.isNotEmpty()) screen = Screen.Review }
-                )
-                DashboardTile(
-                    icon = IconKind.Sync,
-                    label = "同步狀態",
-                    primary = if (isUploading) "上傳中" else "正常",
-                    secondary = if (drafts.isEmpty()) "已整理" else "${drafts.size} 個待處理",
-                    modifier = Modifier.weight(1f),
-                    onClick = { refreshDrafts() }
-                )
-            }
+            DashboardTile(
+                icon = IconKind.Building,
+                label = "地盤",
+                primary = selectedSiteName.ifBlank { "未選擇地盤" },
+                secondary = siteSecondary(),
+                onClick = { message = "請在地盤選擇更改地盤。" }
+            )
+            DashboardTile(
+                icon = IconKind.Folder,
+                label = "資料夾",
+                primary = folderDateLabel(),
+                secondary = remark.ifBlank { "未設定備注" },
+                onClick = { showDatePicker() }
+            )
+            DashboardTile(
+                icon = IconKind.Document,
+                label = "今日檔案",
+                primary = "${drafts.size} 個",
+                secondary = "待上傳",
+                onClick = { if (drafts.isNotEmpty()) screen = Screen.Review }
+            )
+            DashboardTile(
+                icon = IconKind.Sync,
+                label = "同步狀態",
+                primary = if (isUploading) "上傳中" else "正常",
+                secondary = if (drafts.isEmpty()) "已整理" else "${drafts.size} 個待處理",
+                onClick = { refreshDrafts() }
+            )
         }
     }
 
@@ -724,7 +729,8 @@ class MainActivity : ComponentActivity() {
     ) {
         Row(
             modifier = modifier
-                .height(98.dp)
+                .fillMaxWidth()
+                .height(88.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(ComposeColor.White)
                 .border(1.dp, ComposeColor(0xffeee4dc), RoundedCornerShape(16.dp))
@@ -735,7 +741,7 @@ class MainActivity : ComponentActivity() {
         ) {
             Box(
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(38.dp)
                     .clip(CircleShape)
                     .background(ComposeColor(0xfff6eee8)),
                 contentAlignment = Alignment.Center
@@ -744,8 +750,8 @@ class MainActivity : ComponentActivity() {
             }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
                 Text(label, color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.labelMedium, maxLines = 1)
-                Text(primary, color = ComposeColor(0xff2b1711), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(secondary, color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(primary, color = ComposeColor(0xff2b1711), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(secondary, color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             Text("›", color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.headlineSmall)
         }
@@ -1191,10 +1197,18 @@ class MainActivity : ComponentActivity() {
 
     private fun openGallery() {
         if (!hasRequiredSettings()) return
-        val gallery = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "image/*"
-            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        val gallery = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Intent(MediaStore.ACTION_PICK_IMAGES).apply {
+                type = "image/*"
+                putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, MediaStore.getPickImagesMaxLimit())
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            }
+        } else {
+            Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "image/*"
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            }
         }
         try {
             galleryPicker.launch(gallery)

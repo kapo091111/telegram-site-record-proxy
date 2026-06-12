@@ -58,24 +58,27 @@ class EditActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(10, 10, 10, 6)
-            addView(button("取消") { finish() })
+            addView(button("←") { finish() })
             addView(modeLabel, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(button("復原") { editor.undo() })
-            addView(button("保存") { saveEdited() })
+            addView(button("完成") { saveEdited() })
         }
         val toolRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(10, 8, 10, 12)
-            addView(toolButton("畫筆", EditMode.BRUSH))
-            addView(toolButton("直線", EditMode.LINE))
-            addView(toolButton("箭嘴", EditMode.ARROW))
-            addView(toolButton("圈位", EditMode.CIRCLE))
-            addView(toolButton("文字", EditMode.TEXT))
-            addView(toolButton("遮蓋", EditMode.MOSAIC))
+            addView(toolButton("筆", EditMode.BRUSH))
+            addView(toolButton("線", EditMode.LINE))
+            addView(toolButton("箭", EditMode.ARROW))
+            addView(toolButton("圈", EditMode.CIRCLE))
+            addView(toolButton("字", EditMode.TEXT))
+            addView(toolButton("遮", EditMode.MOSAIC))
             addView(toolButton("尺寸", EditMode.DIMENSION))
-            addView(toolButton("裁剪", EditMode.CROP))
-            addView(button("旋轉") { editor.rotate90() })
+            addView(button("字左") { editor.alignDimensionLabel(0.18f) })
+            addView(button("字中") { editor.alignDimensionLabel(0.5f) })
+            addView(button("字右") { editor.alignDimensionLabel(0.82f) })
+            addView(toolButton("裁", EditMode.CROP))
+            addView(button("旋") { editor.rotate90() })
         }
         val tools = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -156,6 +159,7 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
     private val shapes = mutableListOf<Shape>()
     private var active: Shape? = null
     private var draggingLabelIndex = -1
+    private var selectedDimensionIndex = -1
     private var activeScreenX = 0f
     private var activeScreenY = 0f
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -175,8 +179,18 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
     fun undo() {
         if (shapes.isNotEmpty()) {
             shapes.removeAt(shapes.lastIndex)
+            selectedDimensionIndex = shapes.indexOfLast { it.mode == EditMode.DIMENSION }
             invalidate()
         }
+    }
+
+    fun alignDimensionLabel(position: Float) {
+        val index = selectedDimensionIndex.takeIf { it in shapes.indices && shapes[it].mode == EditMode.DIMENSION }
+            ?: shapes.indexOfLast { it.mode == EditMode.DIMENSION }
+        if (index < 0) return
+        selectedDimensionIndex = index
+        shapes[index] = shapes[index].copy(textPosition = position.coerceIn(0.12f, 0.88f))
+        invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -205,6 +219,8 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
                 draggingLabelIndex = if (mode == EditMode.DIMENSION) hitDimensionLabel(event.x, event.y, rect) else -1
                 if (draggingLabelIndex < 0) {
                     active = Shape(mode, imageX, imageY, imageX, imageY, points = listOf(imageX, imageY))
+                } else {
+                    selectedDimensionIndex = draggingLabelIndex
                 }
             }
             MotionEvent.ACTION_MOVE -> {
@@ -269,6 +285,7 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
             .setView(panel)
             .setPositiveButton("加入") { _, _ ->
                 shapes.add(shape.copy(text = input.text.toString().trim(), textPosition = position))
+                selectedDimensionIndex = shapes.lastIndex
                 invalidate()
             }
             .setNegativeButton("取消", null)
@@ -346,10 +363,6 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
                 canvas.drawLine(sx, sy, ex, ey, paint)
                 drawEndpoint(canvas, sx, sy)
                 drawEndpoint(canvas, ex, ey)
-                val path = Path().apply {
-                    moveTo(sx, sy)
-                    lineTo(ex, ey)
-                }
                 val label = shape.text.ifBlank { "尺寸" }
                 val textPaint = Paint(paint).apply {
                     style = Paint.Style.FILL
@@ -449,6 +462,8 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
         }
         canvas.drawCircle(x, y, 13f, fill)
         canvas.drawCircle(x, y, 13f, paint)
+        canvas.drawLine(x - 24f, y, x + 24f, y, paint)
+        canvas.drawLine(x, y - 24f, x, y + 24f, paint)
     }
 
     private fun drawMagnifier(canvas: Canvas, rect: RectF) {
