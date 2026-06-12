@@ -192,8 +192,8 @@ class MainActivity : ComponentActivity() {
             DraftStore.add(this, file, "image/jpeg", "jpg", selectedSiteId, selectedSiteName, recordDate, remark)
             refreshDrafts()
             reviewIndex = drafts.lastIndex.coerceAtLeast(0)
-            screen = Screen.Review
-            message = "已用 HONOR 相機加入待上傳。"
+            message = "已加入待上傳，正在開下一張。按返回可停止連拍。"
+            openSystemCamera()
         } else {
             file.delete()
         }
@@ -274,8 +274,9 @@ class MainActivity : ComponentActivity() {
         ) {
             SoftSquare(IconKind.Menu) { showMenu = true }
             Column(modifier = Modifier.weight(1f)) {
-                Text("工地現場記錄", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = ComposeColor(0xff2b1711), maxLines = 1)
-                Text("先揀好地盤、日期、備注，再影相或揀相。", color = ComposeColor(0xff7d7169), style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                Text("地盤記錄", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = ComposeColor(0xff2b1711), maxLines = 1)
+                Text("先揀好地盤、日期、備注。", color = ComposeColor(0xff7d7169), style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                Text("再影相或揀相。", color = ComposeColor(0xff7d7169), style = MaterialTheme.typography.bodySmall, maxLines = 1)
             }
             SoftSquare(IconKind.Bell) { message = "暫時沒有新通知。" }
         }
@@ -288,7 +289,7 @@ class MainActivity : ComponentActivity() {
                 DashboardTile(
                     icon = IconKind.Building,
                     label = "地盤",
-                    primary = sitePrimary(),
+                    primary = selectedSiteName.ifBlank { "未選擇地盤" },
                     secondary = siteSecondary(),
                     modifier = Modifier.weight(1f),
                     onClick = { message = "請在地盤選擇更改地盤。" }
@@ -723,7 +724,7 @@ class MainActivity : ComponentActivity() {
     ) {
         Row(
             modifier = modifier
-                .height(82.dp)
+                .height(98.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(ComposeColor.White)
                 .border(1.dp, ComposeColor(0xffeee4dc), RoundedCornerShape(16.dp))
@@ -741,10 +742,10 @@ class MainActivity : ComponentActivity() {
             ) {
                 LineIcon(icon, ComposeColor(0xffb87856), Modifier.size(23.dp))
             }
-            Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
                 Text(label, color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.labelMedium, maxLines = 1)
-                Text(primary, color = ComposeColor(0xff2b1711), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(secondary, color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(primary, color = ComposeColor(0xff2b1711), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(secondary, color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Text("›", color = ComposeColor(0xff6f625b), style = MaterialTheme.typography.headlineSmall)
         }
@@ -1180,6 +1181,8 @@ class MainActivity : ComponentActivity() {
         systemCameraFile = file
         val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
             putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            putExtra("android.intent.extra.quickCapture", true)
+            putExtra("android.intent.extra.USE_FRONT_CAMERA", false)
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         systemCamera.launch(intent)
@@ -1187,19 +1190,18 @@ class MainActivity : ComponentActivity() {
 
     private fun openGallery() {
         if (!hasRequiredSettings()) return
-        val photoPicker = Intent(MediaStore.ACTION_PICK_IMAGES).apply {
-            type = "image/*"
-            putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 50)
-        }
-        val fallback = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+        val gallery = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "image/*"
             putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
         }
         try {
-            galleryPicker.launch(if (photoPicker.resolveActivity(packageManager) != null) photoPicker else fallback)
+            galleryPicker.launch(gallery)
         } catch (_: ActivityNotFoundException) {
-            galleryPicker.launch(fallback)
+            galleryPicker.launch(Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "image/*"
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            })
         }
     }
 
@@ -1457,7 +1459,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun errorMessage(body: String): String {
-        return runCatching { JSONObject(body).optString("error") }.getOrNull().takeUnless { it.isNullOrBlank() } ?: body
+        val raw = runCatching { JSONObject(body).optString("error") }.getOrNull().takeUnless { it.isNullOrBlank() } ?: body
+        return if (raw.contains("PIN", ignoreCase = true)) {
+            "後端仍是舊版 Admin API，請在 Render 重新部署最新版本，或檢查 App 的 Render URL 是否填錯。"
+        } else {
+            raw
+        }
     }
 
     private fun encode(value: String): String {

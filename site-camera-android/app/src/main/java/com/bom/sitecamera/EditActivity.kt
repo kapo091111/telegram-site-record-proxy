@@ -12,10 +12,10 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Bundle
+import android.widget.EditText
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import java.io.File
 import kotlin.math.atan2
@@ -44,7 +44,7 @@ class EditActivity : Activity() {
         }
 
         editor = MarkupView(this, bitmap)
-        val controls = LinearLayout(this).apply {
+        val firstRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(8, 8, 8, 8)
             addView(button("裁剪") { editor.mode = EditMode.CROP })
@@ -52,6 +52,10 @@ class EditActivity : Activity() {
             addView(button("畫筆") { editor.mode = EditMode.BRUSH })
             addView(button("直線") { editor.mode = EditMode.LINE })
             addView(button("箭嘴") { editor.mode = EditMode.ARROW })
+        }
+        val secondRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(8, 0, 8, 8)
             addView(button("圈位") { editor.mode = EditMode.CIRCLE })
             addView(button("文字") { editor.mode = EditMode.TEXT })
             addView(button("遮蓋") { editor.mode = EditMode.MOSAIC })
@@ -63,7 +67,8 @@ class EditActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.BLACK)
             addView(editor, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-            addView(HorizontalScrollView(this@EditActivity).apply { addView(controls) })
+            addView(firstRow)
+            addView(secondRow)
         }
         setContentView(root)
     }
@@ -71,6 +76,9 @@ class EditActivity : Activity() {
     private fun button(label: String, action: () -> Unit): Button {
         return Button(this).apply {
             text = label
+            textSize = 12f
+            minWidth = 0
+            setPadding(8, 4, 8, 4)
             setOnClickListener { action() }
         }
     }
@@ -104,11 +112,12 @@ data class Shape(
     val endX: Float,
     val endY: Float,
     val text: String = "",
-    val points: List<Float> = emptyList()
+    val points: List<Float> = emptyList(),
+    val textPosition: Float = 0.5f
 )
 
 class MarkupView(context: Activity, source: Bitmap) : View(context) {
-    var mode: EditMode = EditMode.LINE
+    var mode: EditMode = EditMode.BRUSH
     private var bitmap: Bitmap = source.copy(Bitmap.Config.ARGB_8888, true)
     private val shapes = mutableListOf<Shape>()
     private var active: Shape? = null
@@ -192,22 +201,41 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
     }
 
     private fun askDimensionText(shape: Shape) {
-        val input = android.widget.EditText(context).apply {
+        val input = EditText(context).apply {
             hint = "輸入尺寸，例如 850mm"
+        }
+        var position = 0.5f
+        val panel = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(input)
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(dialogButton("字靠左") { position = 0.18f })
+                addView(dialogButton("字置中") { position = 0.5f })
+                addView(dialogButton("字靠右") { position = 0.82f })
+            })
         }
         AlertDialog.Builder(context)
             .setTitle("尺寸標註")
-            .setView(input)
+            .setView(panel)
             .setPositiveButton("加入") { _, _ ->
-                shapes.add(shape.copy(text = input.text.toString().trim()))
+                shapes.add(shape.copy(text = input.text.toString().trim(), textPosition = position))
                 invalidate()
             }
             .setNegativeButton("取消", null)
             .show()
     }
 
+    private fun dialogButton(label: String, action: () -> Unit): Button {
+        return Button(context).apply {
+            text = label
+            textSize = 12f
+            setOnClickListener { action() }
+        }
+    }
+
     private fun askText(shape: Shape) {
-        val input = android.widget.EditText(context).apply {
+        val input = EditText(context).apply {
             hint = "輸入文字，例如 未完成"
         }
         AlertDialog.Builder(context)
@@ -279,7 +307,10 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
                     color = Color.WHITE
                     strokeWidth = 1f
                 }
-                canvas.drawTextOnPath(label, path, 20f, -18f, textPaint)
+                val labelX = sx + (ex - sx) * shape.textPosition
+                val labelY = sy + (ey - sy) * shape.textPosition
+                val textWidth = textPaint.measureText(label)
+                canvas.drawText(label, labelX - textWidth / 2f, labelY - 18f, textPaint)
             }
             EditMode.CROP -> canvas.drawRect(RectF(min(sx, ex), min(sy, ey), max(sx, ex), max(sy, ey)), paint)
             EditMode.TEXT -> {
