@@ -11,7 +11,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="Site Camera"
+        android:label="地盤記錄"
         android:theme="@style/AppTheme">
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
