@@ -53,11 +53,12 @@ export class SftpSyncService {
                     uploaded += 1;
                 }
                 catch (error) {
-                    console.error(error);
                     if (isGoogleNotFound(error)) {
+                        console.warn(`Google Drive file missing during SFTP sync: photo=${photo.id} driveFileId=${photo.driveFileId}`);
                         await this.db.markPhotoMissing(photo.id);
                     }
                     else {
+                        console.error(error);
                         await this.db.markPhotoSyncFailed(photo.id);
                     }
                 }

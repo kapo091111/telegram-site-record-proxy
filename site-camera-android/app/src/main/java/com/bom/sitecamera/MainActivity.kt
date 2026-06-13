@@ -93,6 +93,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -214,6 +220,11 @@ class MainActivity : ComponentActivity() {
         refreshDrafts()
         setContent { SiteCameraApp() }
         fetchState(silent = true)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshDrafts()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
@@ -1330,38 +1341,27 @@ class MainActivity : ComponentActivity() {
             uploadStatus = "未有待上傳檔案。"
             return
         }
-        isUploading = true
-        uploadStatus = "開始上傳 ${batch.size} 個檔案..."
-        Thread {
-            var completed = 0
-            val targets = linkedSetOf<String>()
-            batch.forEach { draft ->
-                try {
-                    val result = uploadDraft(draft)
-                    completed += 1
-                    DraftStore.removeUploaded(this, draft.id)
-                    val target = listOf(result.optString("siteName", draft.siteName), result.optString("folderName"))
-                        .filter { it.isNotBlank() }
-                        .joinToString(" / ")
-                    if (target.isNotBlank()) targets.add(target)
-                    runOnUiThread {
-                        refreshDrafts()
-                        uploadStatus = "已完成：$completed / ${batch.size}\n${targets.joinToString("\n")}"
-                    }
-                } catch (error: Exception) {
-                    DraftStore.markPending(this, draft.id)
-                    runOnUiThread {
-                        refreshDrafts()
-                        uploadStatus = "已完成：$completed / ${batch.size}\n失敗：${error.message}\n${targets.joinToString("\n")}"
-                    }
-                }
-            }
-            runOnUiThread {
-                isUploading = false
-                refreshDrafts()
-                uploadStatus = "已完成：$completed / ${batch.size}\n${targets.joinToString("\n")}"
-            }
-        }.start()
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+        val manager = WorkManager.getInstance(this)
+        batch.forEach { draft ->
+            DraftStore.markPending(this, draft.id)
+            val request = OneTimeWorkRequestBuilder<UploadWorker>()
+                .setConstraints(constraints)
+                .setInputData(
+                    workDataOf(
+                        "baseUrl" to baseUrl.trimEnd('/'),
+                        "draftId" to draft.id
+                    )
+                )
+                .addTag("site-camera-upload")
+                .build()
+            manager.enqueueUniqueWork("upload-${draft.id}", ExistingWorkPolicy.REPLACE, request)
+        }
+        refreshDrafts()
+        isUploading = false
+        uploadStatus = "已排入背景上傳：${batch.size} 個檔案。可返回主畫面或關閉 app，完成後會自動移除暫存。"
     }
 
     private fun uploadDraft(draft: UploadDraft): JSONObject {

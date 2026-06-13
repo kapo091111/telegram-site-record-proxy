@@ -12,111 +12,142 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Bundle
-import android.widget.EditText
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
-import android.widget.HorizontalScrollView
+import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import java.io.File
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
 class EditActivity : Activity() {
     private lateinit var editor: MarkupView
-    private lateinit var modeLabel: TextView
     private lateinit var draftId: String
+    private val modeButtons = mutableListOf<Button>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        draftId = intent.getStringExtra("draftId") ?: run {
-            finish()
-            return
-        }
-        val draft = DraftStore.find(this, draftId) ?: run {
-            finish()
-            return
-        }
-        val bitmap = BitmapFactory.decodeFile(draft.filePath) ?: run {
-            finish()
-            return
-        }
+        draftId = intent.getStringExtra("draftId") ?: return finish()
+        val draft = DraftStore.find(this, draftId) ?: return finish()
+        val bitmap = BitmapFactory.decodeFile(draft.filePath) ?: return finish()
 
         editor = MarkupView(this, bitmap)
-        modeLabel = TextView(this).apply {
-            text = "畫筆"
-            textSize = 15f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-        }
-        val topRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(10, 10, 10, 6)
-            addView(button("←") { finish() })
-            addView(modeLabel, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(button("復原") { editor.undo() })
-            addView(button("完成") { saveEdited() })
-        }
-        val toolRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(10, 8, 10, 12)
-            addView(toolButton("筆", EditMode.BRUSH))
-            addView(toolButton("線", EditMode.LINE))
-            addView(toolButton("箭", EditMode.ARROW))
-            addView(toolButton("圈", EditMode.CIRCLE))
-            addView(toolButton("字", EditMode.TEXT))
-            addView(toolButton("遮", EditMode.MOSAIC))
-            addView(toolButton("尺寸", EditMode.DIMENSION))
-            addView(button("字左") { editor.alignDimensionLabel(0.18f) })
-            addView(button("字中") { editor.alignDimensionLabel(0.5f) })
-            addView(button("字右") { editor.alignDimensionLabel(0.82f) })
-            addView(toolButton("裁", EditMode.CROP))
-            addView(button("旋") { editor.rotate90() })
-        }
-        val tools = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(toolRow)
-        }
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.BLACK)
-            addView(topRow)
-            addView(editor, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-            addView(tools)
-        }
+        val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        root.addView(editor, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        root.addView(topBar(), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(56), Gravity.TOP))
+        root.addView(toolRail(), FrameLayout.LayoutParams(dp(58), FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.CENTER_VERTICAL))
+        root.addView(bottomBar(), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(76), Gravity.BOTTOM))
         setContentView(root)
+        updateModeButtons()
     }
 
-    private fun button(label: String, action: () -> Unit): Button {
+    private fun topBar(): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            setBackgroundColor(Color.argb(145, 0, 0, 0))
+            addView(iconButton("✕") { finish() })
+            addView(TextView(context).apply {
+                text = "編輯"
+                setTextColor(Color.WHITE)
+                textSize = 18f
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            addView(iconButton("↶") { editor.undo() })
+            addView(iconButton("完成") { saveEdited() }.apply { textSize = 15f }, LinearLayout.LayoutParams(dp(74), dp(44)))
+        }
+    }
+
+    private fun toolRail(): View {
+        val tools = listOf(
+            "✎" to EditMode.BRUSH,
+            "／" to EditMode.LINE,
+            "➜" to EditMode.ARROW,
+            "○" to EditMode.CIRCLE,
+            "T" to EditMode.TEXT,
+            "▦" to EditMode.MOSAIC,
+            "↔" to EditMode.DIMENSION,
+            "裁" to EditMode.CROP
+        )
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(6), dp(8), dp(6), dp(8))
+            setBackgroundColor(Color.argb(95, 0, 0, 0))
+            tools.forEach { (label, mode) ->
+                val button = iconButton(label) {
+                    editor.mode = mode
+                    updateModeButtons()
+                }
+                button.tag = mode
+                modeButtons.add(button)
+                addView(button, LinearLayout.LayoutParams(dp(46), dp(42)))
+            }
+            addView(iconButton("⟳") { editor.rotate90() }, LinearLayout.LayoutParams(dp(46), dp(42)))
+        }
+    }
+
+    private fun bottomBar(): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setBackgroundColor(Color.argb(145, 0, 0, 0))
+            listOf(0xffff7a2a.toInt(), Color.WHITE, 0xff25d366.toInt(), 0xff4aa3ff.toInt(), 0xffff4d6d.toInt()).forEach { color ->
+                addView(colorButton(color), LinearLayout.LayoutParams(dp(42), dp(42)))
+            }
+            addView(TextView(context).apply {
+                text = "  尺寸文字："
+                setTextColor(Color.WHITE)
+                textSize = 13f
+            })
+            addView(smallButton("字左") { editor.alignSelectedDimension(0.18f) })
+            addView(smallButton("字中") { editor.alignSelectedDimension(0.5f) })
+            addView(smallButton("字右") { editor.alignSelectedDimension(0.82f) })
+        }
+    }
+
+    private fun iconButton(label: String, action: () -> Unit): Button {
         return Button(this).apply {
             text = label
-            textSize = 12f
+            textSize = 18f
+            setTextColor(Color.WHITE)
             minWidth = 0
-            setPadding(8, 4, 8, 4)
+            minHeight = 0
+            setPadding(0, 0, 0, 0)
+            setBackgroundColor(Color.TRANSPARENT)
             setOnClickListener { action() }
         }
     }
 
-    private fun toolButton(label: String, mode: EditMode): Button {
-        return button(label) {
-            editor.mode = mode
-            modeLabel.text = when (mode) {
-                EditMode.BRUSH -> "畫筆"
-                EditMode.LINE -> "直線"
-                EditMode.ARROW -> "箭嘴"
-                EditMode.CIRCLE -> "圈位"
-                EditMode.DIMENSION -> "尺寸：拖出兩端，加入後可拖文字"
-                EditMode.CROP -> "裁剪"
-                EditMode.TEXT -> "文字"
-                EditMode.MOSAIC -> "遮蓋"
-            }
+    private fun smallButton(label: String, action: () -> Unit): Button {
+        return iconButton(label, action).apply { textSize = 12f }
+    }
+
+    private fun colorButton(color: Int): Button {
+        return Button(this).apply {
+            text = ""
+            minWidth = 0
+            minHeight = 0
+            setPadding(0, 0, 0, 0)
+            setBackgroundColor(color)
+            setOnClickListener { editor.setMarkupColor(color) }
+        }
+    }
+
+    private fun updateModeButtons() {
+        modeButtons.forEach { button ->
+            val active = button.tag == editor.mode
+            button.setTextColor(if (active) Color.rgb(37, 211, 102) else Color.WHITE)
         }
     }
 
@@ -129,6 +160,8 @@ class EditActivity : Activity() {
         setResult(RESULT_OK)
         finish()
     }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }
 
 enum class EditMode {
@@ -150,47 +183,65 @@ data class Shape(
     val endY: Float,
     val text: String = "",
     val points: List<Float> = emptyList(),
-    val textPosition: Float = 0.5f
+    val textPosition: Float = 0.5f,
+    val labelX: Float? = null,
+    val labelY: Float? = null,
+    val color: Int = Color.rgb(255, 122, 42)
 )
+
+private enum class DragKind {
+    Start,
+    End,
+    Label
+}
+
+private data class DragTarget(val index: Int, val kind: DragKind)
 
 class MarkupView(context: Activity, source: Bitmap) : View(context) {
     var mode: EditMode = EditMode.BRUSH
     private var bitmap: Bitmap = source.copy(Bitmap.Config.ARGB_8888, true)
     private val shapes = mutableListOf<Shape>()
     private var active: Shape? = null
-    private var draggingLabelIndex = -1
-    private var selectedDimensionIndex = -1
+    private var dragTarget: DragTarget? = null
+    private var selectedIndex: Int? = null
     private var activeScreenX = 0f
     private var activeScreenY = 0f
+    private var markupColor = Color.rgb(255, 122, 42)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(255, 120, 40)
         strokeWidth = 8f
         style = Paint.Style.STROKE
-        textSize = 44f
+        strokeCap = Paint.Cap.ROUND
+        textSize = 46f
+    }
+
+    fun setMarkupColor(color: Int) {
+        markupColor = color
+        invalidate()
     }
 
     fun rotate90() {
         val matrix = Matrix().apply { postRotate(90f) }
         bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
         shapes.clear()
+        selectedIndex = null
         invalidate()
     }
 
     fun undo() {
         if (shapes.isNotEmpty()) {
             shapes.removeAt(shapes.lastIndex)
-            selectedDimensionIndex = shapes.indexOfLast { it.mode == EditMode.DIMENSION }
+            selectedIndex = null
             invalidate()
         }
     }
 
-    fun alignDimensionLabel(position: Float) {
-        val index = selectedDimensionIndex.takeIf { it in shapes.indices && shapes[it].mode == EditMode.DIMENSION }
-            ?: shapes.indexOfLast { it.mode == EditMode.DIMENSION }
-        if (index < 0) return
-        selectedDimensionIndex = index
-        shapes[index] = shapes[index].copy(textPosition = position.coerceIn(0.12f, 0.88f))
-        invalidate()
+    fun alignSelectedDimension(position: Float) {
+        val index = selectedIndex ?: shapes.indexOfLast { it.mode == EditMode.DIMENSION }
+        if (index in shapes.indices && shapes[index].mode == EditMode.DIMENSION) {
+            shapes[index] = shapes[index].copy(textPosition = position, labelX = null, labelY = null)
+            selectedIndex = index
+            invalidate()
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -200,11 +251,15 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
         canvas.drawBitmap(bitmap, null, rect, null)
         canvas.save()
         canvas.clipRect(rect)
-        (shapes + listOfNotNull(active)).forEach { drawShape(canvas, it, rect) }
+        (shapes + listOfNotNull(active)).forEachIndexed { index, shape ->
+            drawShape(canvas, shape, rect, index == selectedIndex)
+        }
         canvas.restore()
-        if (active != null) {
+        if (active != null || dragTarget != null) {
             drawReticle(canvas)
-            if (mode == EditMode.DIMENSION || mode == EditMode.CROP || mode == EditMode.TEXT) drawMagnifier(canvas, rect)
+            if (mode == EditMode.DIMENSION || mode == EditMode.CROP || mode == EditMode.TEXT || dragTarget != null) {
+                drawMagnifier(canvas)
+            }
         }
     }
 
@@ -216,27 +271,29 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
         activeScreenY = event.y
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                draggingLabelIndex = if (mode == EditMode.DIMENSION) hitDimensionLabel(event.x, event.y, rect) else -1
-                if (draggingLabelIndex < 0) {
-                    active = Shape(mode, imageX, imageY, imageX, imageY, points = listOf(imageX, imageY))
-                } else {
-                    selectedDimensionIndex = draggingLabelIndex
+                dragTarget = hitExisting(event.x, event.y, rect)
+                if (dragTarget == null) {
+                    active = Shape(mode, imageX, imageY, imageX, imageY, points = listOf(imageX, imageY), color = markupColor)
+                    selectedIndex = null
                 }
             }
             MotionEvent.ACTION_MOVE -> {
-                if (draggingLabelIndex >= 0) {
-                    moveDimensionLabel(draggingLabelIndex, imageX, imageY)
+                val target = dragTarget
+                if (target != null) {
+                    moveExisting(target, imageX, imageY)
                 } else {
                     active = active?.let {
-                        if (mode == EditMode.BRUSH) it.copy(endX = imageX, endY = imageY, points = it.points + listOf(imageX, imageY))
-                        else it.copy(endX = imageX, endY = imageY)
+                        if (mode == EditMode.BRUSH) {
+                            it.copy(endX = imageX, endY = imageY, points = it.points + listOf(imageX, imageY))
+                        } else {
+                            it.copy(endX = imageX, endY = imageY)
+                        }
                     }
                 }
             }
-            MotionEvent.ACTION_UP -> {
-                if (draggingLabelIndex >= 0) {
-                    moveDimensionLabel(draggingLabelIndex, imageX, imageY)
-                    draggingLabelIndex = -1
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (dragTarget != null) {
+                    dragTarget = null
                 } else {
                     val finished = active?.copy(endX = imageX, endY = imageY)
                     active = null
@@ -263,81 +320,86 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
         }
         if (shape.mode == EditMode.BRUSH && shape.points.size < 4) return
         shapes.add(shape)
+        selectedIndex = shapes.lastIndex
     }
 
     private fun askDimensionText(shape: Shape) {
         val input = EditText(context).apply {
-            hint = "輸入尺寸，例如 850mm"
-        }
-        var position = 0.5f
-        val panel = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(input)
-            addView(LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                addView(dialogButton("字靠左") { position = 0.18f })
-                addView(dialogButton("字置中") { position = 0.5f })
-                addView(dialogButton("字靠右") { position = 0.82f })
-            })
+            hint = "例如 850mm"
+            setSingleLine(true)
         }
         AlertDialog.Builder(context)
-            .setTitle("尺寸標註")
-            .setView(panel)
+            .setTitle("標尺寸")
+            .setView(input)
             .setPositiveButton("加入") { _, _ ->
-                shapes.add(shape.copy(text = input.text.toString().trim(), textPosition = position))
-                selectedDimensionIndex = shapes.lastIndex
+                shapes.add(shape.copy(text = input.text.toString().trim().ifBlank { "尺寸" }))
+                selectedIndex = shapes.lastIndex
                 invalidate()
             }
             .setNegativeButton("取消", null)
             .show()
-    }
-
-    private fun dialogButton(label: String, action: () -> Unit): Button {
-        return Button(context).apply {
-            text = label
-            textSize = 12f
-            setOnClickListener { action() }
-        }
     }
 
     private fun askText(shape: Shape) {
         val input = EditText(context).apply {
-            hint = "輸入文字，例如 未完成"
+            hint = "輸入文字"
+            setSingleLine(false)
         }
         AlertDialog.Builder(context)
-            .setTitle("加入文字")
+            .setTitle("文字")
             .setView(input)
             .setPositiveButton("加入") { _, _ ->
-                shapes.add(shape.copy(text = input.text.toString().trim()))
+                shapes.add(shape.copy(text = input.text.toString().trim().ifBlank { "文字" }, labelX = shape.startX, labelY = shape.startY))
+                selectedIndex = shapes.lastIndex
                 invalidate()
             }
             .setNegativeButton("取消", null)
             .show()
     }
 
-    private fun crop(shape: Shape) {
-        val left = (min(shape.startX, shape.endX) * bitmap.width).toInt()
-        val top = (min(shape.startY, shape.endY) * bitmap.height).toInt()
-        val right = (max(shape.startX, shape.endX) * bitmap.width).toInt()
-        val bottom = (max(shape.startY, shape.endY) * bitmap.height).toInt()
-        val width = right - left
-        val height = bottom - top
-        if (width >= 80 && height >= 80 && left >= 0 && top >= 0 && right <= bitmap.width && bottom <= bitmap.height) {
-            bitmap = Bitmap.createBitmap(bitmap, left, top, width, height)
-            shapes.clear()
-            invalidate()
+    private fun hitExisting(screenX: Float, screenY: Float, rect: RectF): DragTarget? {
+        for (index in shapes.indices.reversed()) {
+            val shape = shapes[index]
+            val sx = rect.left + shape.startX * rect.width()
+            val sy = rect.top + shape.startY * rect.height()
+            val ex = rect.left + shape.endX * rect.width()
+            val ey = rect.top + shape.endY * rect.height()
+            if (shape.mode == EditMode.DIMENSION) {
+                val label = dimensionLabelPoint(shape, rect)
+                if (distance(screenX, screenY, label.first, label.second) < 58f) return DragTarget(index, DragKind.Label)
+                if (distance(screenX, screenY, sx, sy) < 42f) return DragTarget(index, DragKind.Start)
+                if (distance(screenX, screenY, ex, ey) < 42f) return DragTarget(index, DragKind.End)
+            }
+            if (shape.mode == EditMode.TEXT) {
+                val labelX = rect.left + (shape.labelX ?: shape.startX) * rect.width()
+                val labelY = rect.top + (shape.labelY ?: shape.startY) * rect.height()
+                if (distance(screenX, screenY, labelX, labelY) < 70f) return DragTarget(index, DragKind.Label)
+            }
         }
+        return null
+    }
+
+    private fun moveExisting(target: DragTarget, x: Float, y: Float) {
+        if (target.index !in shapes.indices) return
+        val shape = shapes[target.index]
+        shapes[target.index] = when (target.kind) {
+            DragKind.Start -> shape.copy(startX = x, startY = y)
+            DragKind.End -> shape.copy(endX = x, endY = y)
+            DragKind.Label -> shape.copy(labelX = x, labelY = y)
+        }
+        selectedIndex = target.index
     }
 
     fun exportBitmap(): Bitmap {
         val result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(result)
         val rect = RectF(0f, 0f, result.width.toFloat(), result.height.toFloat())
-        shapes.forEach { drawShape(canvas, it, rect) }
+        shapes.forEach { drawShape(canvas, it, rect, false) }
         return result
     }
 
     private fun imageRect(): RectF {
+        if (width == 0 || height == 0) return RectF()
         val viewRatio = width.toFloat() / height.toFloat()
         val imageRatio = bitmap.width.toFloat() / bitmap.height.toFloat()
         return if (imageRatio > viewRatio) {
@@ -349,88 +411,76 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
         }
     }
 
-    private fun drawShape(canvas: Canvas, shape: Shape, rect: RectF) {
+    private fun drawShape(canvas: Canvas, shape: Shape, rect: RectF, selected: Boolean) {
         val sx = rect.left + shape.startX * rect.width()
         val sy = rect.top + shape.startY * rect.height()
         val ex = rect.left + shape.endX * rect.width()
         val ey = rect.top + shape.endY * rect.height()
+        paint.color = shape.color
         when (shape.mode) {
             EditMode.BRUSH -> drawBrush(canvas, shape, rect)
             EditMode.LINE -> canvas.drawLine(sx, sy, ex, ey, paint)
             EditMode.ARROW -> drawArrow(canvas, sx, sy, ex, ey)
             EditMode.CIRCLE -> canvas.drawOval(RectF(min(sx, ex), min(sy, ey), max(sx, ex), max(sy, ey)), paint)
-            EditMode.DIMENSION -> {
-                canvas.drawLine(sx, sy, ex, ey, paint)
-                drawEndpoint(canvas, sx, sy)
-                drawEndpoint(canvas, ex, ey)
-                val label = shape.text.ifBlank { "尺寸" }
-                val textPaint = Paint(paint).apply {
-                    style = Paint.Style.FILL
-                    color = Color.WHITE
-                    strokeWidth = 1f
-                }
-                val labelX = sx + (ex - sx) * shape.textPosition
-                val labelY = sy + (ey - sy) * shape.textPosition
-                val textWidth = textPaint.measureText(label)
-                val pad = 14f
-                val textBounds = RectF(labelX - textWidth / 2f - pad, labelY - 62f, labelX + textWidth / 2f + pad, labelY - 8f)
-                val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    style = Paint.Style.FILL
-                    color = Color.argb(180, 0, 0, 0)
-                }
-                canvas.drawRoundRect(textBounds, 14f, 14f, bg)
-                canvas.drawText(label, labelX - textWidth / 2f, labelY - 22f, textPaint)
-            }
+            EditMode.DIMENSION -> drawDimension(canvas, shape, rect, selected)
             EditMode.CROP -> canvas.drawRect(RectF(min(sx, ex), min(sy, ey), max(sx, ex), max(sy, ey)), paint)
-            EditMode.TEXT -> {
-                val textPaint = Paint(paint).apply {
-                    style = Paint.Style.FILL
-                    color = Color.WHITE
-                    strokeWidth = 1f
-                    textSize = 54f
-                }
-                canvas.drawText(shape.text.ifBlank { "文字" }, sx, sy, textPaint)
-            }
+            EditMode.TEXT -> drawTextShape(canvas, shape, rect, selected)
             EditMode.MOSAIC -> {
                 val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     style = Paint.Style.FILL
                     color = Color.rgb(28, 34, 31)
-                    alpha = 220
+                    alpha = 230
                 }
                 canvas.drawRect(RectF(min(sx, ex), min(sy, ey), max(sx, ex), max(sy, ey)), fill)
             }
         }
     }
 
-    private fun hitDimensionLabel(x: Float, y: Float, rect: RectF): Int {
-        for (index in shapes.indices.reversed()) {
-            val shape = shapes[index]
-            if (shape.mode != EditMode.DIMENSION) continue
-            val sx = rect.left + shape.startX * rect.width()
-            val sy = rect.top + shape.startY * rect.height()
-            val ex = rect.left + shape.endX * rect.width()
-            val ey = rect.top + shape.endY * rect.height()
-            val label = shape.text.ifBlank { "尺寸" }
-            val textPaint = Paint(paint).apply {
-                style = Paint.Style.FILL
-                textSize = paint.textSize
-            }
-            val labelX = sx + (ex - sx) * shape.textPosition
-            val labelY = sy + (ey - sy) * shape.textPosition - 35f
-            val halfWidth = max(70f, textPaint.measureText(label) / 2f + 34f)
-            if (x in (labelX - halfWidth)..(labelX + halfWidth) && y in (labelY - 42f)..(labelY + 28f)) return index
+    private fun drawDimension(canvas: Canvas, shape: Shape, rect: RectF, selected: Boolean) {
+        val sx = rect.left + shape.startX * rect.width()
+        val sy = rect.top + shape.startY * rect.height()
+        val ex = rect.left + shape.endX * rect.width()
+        val ey = rect.top + shape.endY * rect.height()
+        paint.color = shape.color
+        canvas.drawLine(sx, sy, ex, ey, paint)
+        drawEndpoint(canvas, sx, sy)
+        drawEndpoint(canvas, ex, ey)
+        val label = shape.text.ifBlank { "尺寸" }
+        val labelPoint = dimensionLabelPoint(shape, rect)
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.WHITE
+            textSize = 50f
+            strokeWidth = 1f
         }
-        return -1
+        val textWidth = textPaint.measureText(label)
+        val bg = RectF(labelPoint.first - textWidth / 2f - 18f, labelPoint.second - 58f, labelPoint.first + textWidth / 2f + 18f, labelPoint.second + 10f)
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.argb(if (selected) 210 else 150, 0, 0, 0)
+            canvas.drawRoundRect(bg, 18f, 18f, this)
+        }
+        canvas.drawText(label, labelPoint.first - textWidth / 2f, labelPoint.second - 14f, textPaint)
     }
 
-    private fun moveDimensionLabel(index: Int, imageX: Float, imageY: Float) {
-        val shape = shapes.getOrNull(index) ?: return
-        val dx = shape.endX - shape.startX
-        val dy = shape.endY - shape.startY
-        val lengthSquared = dx * dx + dy * dy
-        if (lengthSquared <= 0.0001f) return
-        val projected = (((imageX - shape.startX) * dx + (imageY - shape.startY) * dy) / lengthSquared).coerceIn(0.12f, 0.88f)
-        shapes[index] = shape.copy(textPosition = projected)
+    private fun drawTextShape(canvas: Canvas, shape: Shape, rect: RectF, selected: Boolean) {
+        val x = rect.left + (shape.labelX ?: shape.startX) * rect.width()
+        val y = rect.top + (shape.labelY ?: shape.startY) * rect.height()
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.WHITE
+            textSize = 58f
+            strokeWidth = 1f
+        }
+        if (selected) {
+            val width = textPaint.measureText(shape.text.ifBlank { "文字" })
+            val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.FILL
+                color = Color.argb(125, 0, 0, 0)
+            }
+            canvas.drawRoundRect(RectF(x - 14f, y - 58f, x + width + 14f, y + 12f), 16f, 16f, bg)
+        }
+        canvas.drawText(shape.text.ifBlank { "文字" }, x, y, textPaint)
     }
 
     private fun drawBrush(canvas: Canvas, shape: Shape, rect: RectF) {
@@ -460,19 +510,19 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
             style = Paint.Style.FILL
             color = Color.WHITE
         }
-        canvas.drawCircle(x, y, 13f, fill)
-        canvas.drawCircle(x, y, 13f, paint)
-        canvas.drawLine(x - 24f, y, x + 24f, y, paint)
-        canvas.drawLine(x, y - 24f, x, y + 24f, paint)
+        canvas.drawCircle(x, y, 15f, fill)
+        canvas.drawCircle(x, y, 15f, paint)
+        canvas.drawLine(x - 28f, y, x + 28f, y, paint)
+        canvas.drawLine(x, y - 28f, x, y + 28f, paint)
     }
 
-    private fun drawMagnifier(canvas: Canvas, rect: RectF) {
-        val shape = active ?: return
-        val radius = 92f
-        val cx = activeScreenX.coerceIn(radius + 10f, width - radius - 10f)
-        val cy = (activeScreenY - 150f).coerceIn(radius + 10f, height - radius - 10f)
-        val imagePx = (shape.endX * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
-        val imagePy = (shape.endY * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
+    private fun drawMagnifier(canvas: Canvas) {
+        val radius = 88f
+        val cx = activeScreenX.coerceIn(radius + 12f, width - radius - 12f)
+        val cy = (activeScreenY - 150f).coerceIn(radius + 12f, height - radius - 12f)
+        val rect = imageRect()
+        val imagePx = (((activeScreenX - rect.left) / rect.width()).coerceIn(0f, 1f) * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
+        val imagePy = (((activeScreenY - rect.top) / rect.height()).coerceIn(0f, 1f) * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
         val sample = min(bitmap.width, bitmap.height) / 7
         val src = Rect(
             (imagePx - sample).coerceAtLeast(0),
@@ -491,6 +541,7 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
             strokeWidth = 5f
             color = Color.WHITE
         }
+        paint.color = markupColor
         canvas.drawCircle(cx, cy, radius, border)
         canvas.drawLine(cx - 28f, cy, cx + 28f, cy, paint)
         canvas.drawLine(cx, cy - 28f, cx, cy + 28f, paint)
@@ -506,5 +557,30 @@ class MarkupView(context: Activity, source: Bitmap) : View(context) {
         canvas.drawCircle(activeScreenX, activeScreenY, 22f, guide)
         canvas.drawLine(activeScreenX - 34f, activeScreenY, activeScreenX + 34f, activeScreenY, guide)
         canvas.drawLine(activeScreenX, activeScreenY - 34f, activeScreenX, activeScreenY + 34f, guide)
+    }
+
+    private fun dimensionLabelPoint(shape: Shape, rect: RectF): Pair<Float, Float> {
+        val x = shape.labelX ?: (shape.startX + (shape.endX - shape.startX) * shape.textPosition)
+        val y = shape.labelY ?: (shape.startY + (shape.endY - shape.startY) * shape.textPosition)
+        return Pair(rect.left + x * rect.width(), rect.top + y * rect.height())
+    }
+
+    private fun crop(shape: Shape) {
+        val left = (min(shape.startX, shape.endX) * bitmap.width).toInt()
+        val top = (min(shape.startY, shape.endY) * bitmap.height).toInt()
+        val right = (max(shape.startX, shape.endX) * bitmap.width).toInt()
+        val bottom = (max(shape.startY, shape.endY) * bitmap.height).toInt()
+        val cropWidth = right - left
+        val cropHeight = bottom - top
+        if (cropWidth >= 80 && cropHeight >= 80 && left >= 0 && top >= 0 && right <= bitmap.width && bottom <= bitmap.height) {
+            bitmap = Bitmap.createBitmap(bitmap, left, top, cropWidth, cropHeight)
+            shapes.clear()
+            selectedIndex = null
+            invalidate()
+        }
+    }
+
+    private fun distance(ax: Float, ay: Float, bx: Float, by: Float): Float {
+        return hypot((ax - bx).toDouble(), (ay - by).toDouble()).toFloat()
     }
 }
