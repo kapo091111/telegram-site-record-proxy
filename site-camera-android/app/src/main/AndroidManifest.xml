@@ -1,6 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
@@ -11,7 +12,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="地盤記錄"
+        android:label="Site Camera"
         android:theme="@style/AppTheme">
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
