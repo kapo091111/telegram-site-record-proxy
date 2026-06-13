@@ -15,7 +15,7 @@ export function configureMobileUpload(input) {
         }
         next();
     });
-    router.get('/state', async (_req, res) => {
+    router.get('/state', asyncRoute(async (_req, res) => {
         const [currentSite, recordDate, remark, sites] = await Promise.all([
             input.sites.currentSite(input.ownerUserId),
             currentRecordDate(input.db, input.ownerUserId),
@@ -29,13 +29,13 @@ export function configureMobileUpload(input) {
             folderName: dateFolderName(recordDate, remark || ''),
             sites
         });
-    });
-    router.post('/sync-sites', async (_req, res) => {
+    }));
+    router.post('/sync-sites', asyncRoute(async (_req, res) => {
         const result = await input.sites.syncSitesFromSheet(input.ownerUserId);
         const sites = await input.db.listSites(input.ownerUserId, 100);
         res.json({ ok: true, result, sites });
-    });
-    router.post('/delete-site', express.json({ limit: '1mb' }), async (req, res) => {
+    }));
+    router.post('/delete-site', express.json({ limit: '1mb' }), asyncRoute(async (req, res) => {
         const siteId = String(req.body?.siteId || '');
         const site = await input.db.siteById(input.ownerUserId, siteId);
         if (!site || site.archivedAt) {
@@ -51,8 +51,8 @@ export function configureMobileUpload(input) {
         }
         const sites = await input.db.listSites(input.ownerUserId, 100);
         res.json({ ok: true, sites });
-    });
-    router.post('/upload', express.raw({ type: '*/*', limit: MAX_UPLOAD_BYTES }), async (req, res) => {
+    }));
+    router.post('/upload', express.raw({ type: '*/*', limit: MAX_UPLOAD_BYTES }), asyncRoute(async (req, res) => {
         const siteId = String(req.header('x-site-id') || req.query.siteId || '');
         const site = await input.db.siteById(input.ownerUserId, siteId);
         if (!site || site.archivedAt) {
@@ -114,8 +114,36 @@ export function configureMobileUpload(input) {
             driveUrl: record.driveUrl,
             synologyStatus: record.synologyStatus
         });
+    }));
+    router.use((error, _req, res, _next) => {
+        const status = googleAuthStatus(error) || 500;
+        const message = googleAuthStatus(error)
+            ? 'Google 授權已失效，請重新產生 GOOGLE_REFRESH_TOKEN。'
+            : '手機 API 暫時處理不到要求。';
+        console.error(error);
+        res.status(status).json({ ok: false, error: message });
     });
     input.app.use('/api/mobile', router);
+}
+function asyncRoute(handler) {
+    return async (req, res, next) => {
+        try {
+            await handler(req, res, next);
+        }
+        catch (error) {
+            next(error);
+        }
+    };
+}
+function googleAuthStatus(error) {
+    const candidate = error;
+    const status = Number(candidate.status || candidate.code || 0);
+    const message = String(candidate.message || candidate.cause?.message || '');
+    if (status === 400 && message.includes('invalid_grant'))
+        return 502;
+    if (status === 401 || status === 403)
+        return status;
+    return null;
 }
 async function currentRecordDate(db, userId) {
     return (await db.currentRecordDate(userId)) || hkDate();
