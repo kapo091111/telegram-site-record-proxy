@@ -131,7 +131,8 @@ private enum class LensMode {
 private data class ZoomOption(
     val label: String,
     val ratio: Float,
-    val lensMode: LensMode = LensMode.Main
+    val lensMode: LensMode = LensMode.Main,
+    val cameraId: String? = null
 )
 
 private enum class IconKind {
@@ -183,6 +184,7 @@ class MainActivity : ComponentActivity() {
     private var maxZoomRatio by mutableFloatStateOf(1f)
     private var zoomOptions by mutableStateOf<List<ZoomOption>>(listOf(ZoomOption("1x", 1f)))
     private var selectedCameraId by mutableStateOf("")
+    private var requestedCameraId by mutableStateOf<String?>(null)
     private var cameraNotice by mutableStateOf("")
     private var showMenu by mutableStateOf(false)
     private var showRemarkDialog by mutableStateOf(false)
@@ -1120,6 +1122,7 @@ class MainActivity : ComponentActivity() {
                 cameraProvider?.bindToLifecycle(this, selector, preview, imageCapture)
             } catch (_: Exception) {
                 lensMode = LensMode.Main
+                requestedCameraId = null
                 cameraProvider?.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageCapture)
             }
             refreshCameraZoomState()
@@ -1128,14 +1131,68 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun chooseCameraSelector(): CameraSelector {
+        requestedCameraId?.let { cameraId ->
+            return CameraSelector.Builder()
+                .addCameraFilter { infos -> infos.filter { Camera2Id.fromCameraInfo(it) == cameraId } }
+                .build()
+        }
         if (lensMode == LensMode.Wide) {
-            wideCameraId()?.let { cameraId ->
+            cameraXWideCameraId()?.let { cameraId ->
+                requestedCameraId = cameraId
                 return CameraSelector.Builder()
                     .addCameraFilter { infos -> infos.filter { Camera2Id.fromCameraInfo(it) == cameraId } }
                     .build()
             }
         }
         return CameraSelector.DEFAULT_BACK_CAMERA
+    }
+
+    private fun cameraXWideCameraId(): String? {
+        val provider = cameraProvider ?: return null
+        val currentId = selectedCameraId.takeIf { it.isNotBlank() }
+        val currentIntrinsic = camera?.cameraInfo?.let { cameraIntrinsicZoomRatio(it) }?.takeIf { it > 0f } ?: 1f
+        val currentFocal = cameraFocalMin(selectedCameraId).takeIf { it > 0f }
+        return provider.availableCameraInfos
+            .mapNotNull { info ->
+                val cameraId = Camera2Id.fromCameraInfo(info) ?: return@mapNotNull null
+                if (!isBackCameraId(cameraId) || cameraId == currentId) return@mapNotNull null
+                val intrinsic = cameraIntrinsicZoomRatio(info)
+                val focal = cameraFocalMin(cameraId).takeIf { it > 0f }
+                val focalRatio = if (currentFocal != null && focal != null) focal / currentFocal else null
+                val wideRatio = listOfNotNull(
+                    intrinsic.takeIf { it in 0.1f..0.95f },
+                    focalRatio?.takeIf { it in 0.1f..0.95f }
+                ).minOrNull() ?: return@mapNotNull null
+                cameraId to wideRatio
+            }
+            .filter { (_, ratio) -> ratio < currentIntrinsic * 0.95f }
+            .minByOrNull { it.second }
+            ?.first
+    }
+
+    private fun cameraIntrinsicZoomRatio(info: CameraInfo): Float {
+        return runCatching {
+            val method = info.javaClass.methods.firstOrNull {
+                it.name == "getIntrinsicZoomRatio" && it.parameterTypes.isEmpty()
+            }
+            (method?.invoke(info) as? Float) ?: 1f
+        }.getOrDefault(1f)
+    }
+
+    private fun cameraXWideRatio(cameraId: String): Float? {
+        val provider = cameraProvider ?: return null
+        return provider.availableCameraInfos
+            .firstOrNull { Camera2Id.fromCameraInfo(it) == cameraId }
+            ?.let { cameraIntrinsicZoomRatio(it).takeIf { ratio -> ratio in 0.1f..0.95f } }
+    }
+
+    private fun isBackCameraId(cameraId: String?): Boolean {
+        if (cameraId.isNullOrBlank()) return false
+        val manager = getSystemService(CAMERA_SERVICE) as CameraManager
+        return runCatching {
+            manager.getCameraCharacteristics(cameraId)
+                .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+        }.getOrDefault(false)
     }
 
     private fun wideCameraId(): String? {
@@ -1160,8 +1217,7 @@ class MainActivity : ComponentActivity() {
         }.minByOrNull { it.second }?.takeIf { it.second < mainFocal * 0.95f }?.first
     }
 
-    private fun physicalWideRatio(): Float? {
-        val wideId = wideCameraId() ?: return null
+    private fun physicalWideRatio(wideId: String): Float? {
         val main = cameraFocalMin(selectedCameraId).takeIf { it > 0f } ?: return null
         val wide = cameraFocalMin(wideId).takeIf { it > 0f } ?: return null
         return (wide / main).coerceIn(0.1f, 0.95f)
@@ -1186,9 +1242,10 @@ class MainActivity : ComponentActivity() {
         provider.availableCameraInfos.forEach { info ->
             val cameraId = Camera2Id.fromCameraInfo(info)
             val zoom = info.zoomState.value
+            val intrinsic = cameraIntrinsicZoomRatio(info)
             Log.d(
                 "SiteCamera",
-                "CameraX cameraId=$cameraId minZoom=${zoom?.minZoomRatio} maxZoom=${zoom?.maxZoomRatio} currentZoom=${zoom?.zoomRatio}"
+                "CameraX cameraId=$cameraId intrinsicZoom=$intrinsic minZoom=${zoom?.minZoomRatio} maxZoom=${zoom?.maxZoomRatio} currentZoom=${zoom?.zoomRatio}"
             )
         }
         manager.cameraIdList.forEach { id ->
@@ -1208,7 +1265,7 @@ class MainActivity : ComponentActivity() {
         zoomRatio = (state?.zoomRatio ?: 1f).coerceIn(minZoomRatio, maxZoomRatio)
         selectedCameraId = camera?.cameraInfo?.let { Camera2Id.fromCameraInfo(it) }.orEmpty()
         zoomOptions = buildZoomOptions()
-        cameraNotice = if (minZoomRatio >= 0.99f && wideCameraId() == null) {
+        cameraNotice = if (minZoomRatio >= 0.99f && zoomOptions.none { it.lensMode == LensMode.Wide }) {
             "此裝置未向第三方應用程式開放超廣角鏡頭"
         } else {
             ""
@@ -1227,8 +1284,11 @@ class MainActivity : ComponentActivity() {
         if (minZoomRatio < 0.99f) {
             options.add(ZoomOption(formatZoom(minZoomRatio), minZoomRatio))
         } else {
-            physicalWideRatio()?.takeIf { it < 0.95f }?.let { ratio ->
-                options.add(ZoomOption(formatZoom(ratio), 1f, LensMode.Wide))
+            val activeWideId = requestedCameraId?.takeIf { lensMode == LensMode.Wide && it == selectedCameraId }
+            val wideId = activeWideId ?: cameraXWideCameraId()
+            wideId?.let { cameraId ->
+                val ratio = cameraXWideRatio(cameraId) ?: physicalWideRatio(cameraId) ?: 0.5f
+                options.add(ZoomOption(formatZoom(ratio), 1f, LensMode.Wide, cameraId))
             }
         }
         if (1f in minZoomRatio..maxZoomRatio) {
@@ -1240,12 +1300,13 @@ class MainActivity : ComponentActivity() {
         if (maxZoomRatio > 2.5f) {
             options.add(ZoomOption(formatZoom(maxZoomRatio.coerceAtMost(5f)), maxZoomRatio.coerceAtMost(5f)))
         }
-        return options.distinctBy { "${it.lensMode}:${"%.2f".format(Locale.US, it.ratio)}" }.ifEmpty { listOf(ZoomOption(formatZoom(zoomRatio), zoomRatio)) }
+        return options.distinctBy { "${it.lensMode}:${it.cameraId}:${"%.2f".format(Locale.US, it.ratio)}" }.ifEmpty { listOf(ZoomOption(formatZoom(zoomRatio), zoomRatio)) }
     }
 
     private fun applyZoomOption(option: ZoomOption) {
-        if (option.lensMode != lensMode) {
+        if (option.cameraId != requestedCameraId || option.lensMode != lensMode) {
             lensMode = option.lensMode
+            requestedCameraId = option.cameraId
             zoomRatio = 1f
             startCamera()
             return
@@ -1268,7 +1329,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun isZoomSelected(option: ZoomOption): Boolean {
-        return option.lensMode == lensMode && kotlin.math.abs(zoomRatio - option.ratio) < 0.08f
+        val cameraMatches = option.cameraId == null || option.cameraId == selectedCameraId
+        return cameraMatches && option.lensMode == lensMode && kotlin.math.abs(zoomRatio - option.ratio) < 0.08f
     }
 
     private fun formatZoom(value: Float): String {
