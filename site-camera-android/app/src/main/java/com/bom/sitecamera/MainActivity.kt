@@ -2,10 +2,13 @@ package com.bom.sitecamera
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.PendingIntent
+import android.content.ContentUris
 import android.app.DatePickerDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.hardware.camera2.CameraCharacteristics
@@ -14,12 +17,15 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.provider.MediaStore.MediaColumns
 import android.provider.OpenableColumns
 import android.util.Log
+import android.util.Size as AndroidSize
 import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.Camera
@@ -38,7 +44,9 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -54,6 +62,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -70,17 +80,21 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect as ComposeRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.Path as ComposePath
@@ -88,6 +102,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -109,17 +126,22 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.security.MessageDigest
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeFormatter.ofPattern
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private enum class Screen {
     Home,
     Camera,
-    Review
+    Review,
+    Gallery
 }
 
 private enum class LensMode {
@@ -161,6 +183,20 @@ private data class SiteOption(
     val name: String
 )
 
+private data class GalleryItem(
+    val id: Long,
+    val uri: Uri,
+    val displayName: String,
+    val dateTaken: Long,
+    val size: Long,
+    val mimeType: String
+)
+
+private data class SourceCopyResult(
+    val file: File,
+    val hash: String
+)
+
 class MainActivity : ComponentActivity() {
     private var screen by mutableStateOf(Screen.Home)
     private var message by mutableStateOf("")
@@ -171,6 +207,12 @@ class MainActivity : ComponentActivity() {
     private var baseUrl by mutableStateOf("https://telegram-site-record-proxy.onrender.com")
     private var sites by mutableStateOf<List<SiteOption>>(emptyList())
     private var drafts by mutableStateOf<List<UploadDraft>>(emptyList())
+    private var trashItems by mutableStateOf<List<SourceTrashItem>>(emptyList())
+    private var galleryItems by mutableStateOf<List<GalleryItem>>(emptyList())
+    private var selectedGalleryIds by mutableStateOf<List<Long>>(emptyList())
+    private var galleryLoading by mutableStateOf(false)
+    private var galleryImporting by mutableStateOf(false)
+    private var galleryStatus by mutableStateOf("")
     private var siteSearch by mutableStateOf("")
     private var showAdvanced by mutableStateOf(false)
     private var uploadStatus by mutableStateOf("")
@@ -188,6 +230,8 @@ class MainActivity : ComponentActivity() {
     private var cameraNotice by mutableStateOf("")
     private var showMenu by mutableStateOf(false)
     private var showRemarkDialog by mutableStateOf(false)
+    private val galleryBounds = mutableMapOf<Long, ComposeRect>()
+    private var pendingTrashRequestIds: Set<String> = emptySet()
 
     private lateinit var previewView: PreviewView
     private var imageCapture: ImageCapture? = null
@@ -199,17 +243,19 @@ class MainActivity : ComponentActivity() {
         if (result.resultCode != RESULT_OK) return@registerForActivityResult
         val data = result.data ?: return@registerForActivityResult
         val clipData = data.clipData
+        var added = 0
+        var failed = 0
         if (clipData != null) {
             for (index in 0 until clipData.itemCount) {
-                copyUriToDraft(clipData.getItemAt(index).uri)
+                if (copyUriToDraft(clipData.getItemAt(index).uri)) added++ else failed++
             }
         } else {
-            data.data?.let { copyUriToDraft(it) }
+            data.data?.let { if (copyUriToDraft(it)) added++ else failed++ }
         }
         refreshDrafts()
         reviewIndex = (drafts.lastIndex).coerceAtLeast(0)
-        screen = Screen.Review
-        message = "已加入待上傳清單。"
+        screen = if (added > 0) Screen.Review else Screen.Home
+        message = if (failed == 0) "已加入待上傳清單。" else "已加入 $added 張，$failed 張讀取失敗。"
     }
 
     private val systemCamera = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -230,6 +276,27 @@ class MainActivity : ComponentActivity() {
         refreshDrafts()
         screen = Screen.Review
         message = "已更新編輯版本。"
+    }
+
+    private val galleryPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        if (hasGalleryReadPermission()) {
+            showInternalGallery()
+        } else {
+            message = "未能讀取相簿，已改用系統相簿選取。"
+            openSystemGalleryPicker()
+        }
+    }
+
+    private val trashLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        if (result.resultCode == RESULT_OK) {
+            DraftStore.removeTrash(this, pendingTrashRequestIds)
+            pendingTrashRequestIds = emptySet()
+            refreshDrafts()
+            message = "已按系統確認移到垃圾桶。"
+        } else {
+            pendingTrashRequestIds = emptySet()
+            message = "未移到垃圾桶；原相片仍保留在相簿。"
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -260,6 +327,7 @@ class MainActivity : ComponentActivity() {
                     Screen.Home -> HomeScreen()
                     Screen.Camera -> CameraScreen()
                     Screen.Review -> ReviewScreen()
+                    Screen.Gallery -> GalleryScreen()
                 }
             }
         }
@@ -431,6 +499,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun DraftCard() {
+        val pendingTrash = trashItems.filter { it.status == "pending_trash" }
         Panel("待上傳", IconKind.Upload, trailing = "${drafts.size} 個檔案 ›") {
             if (drafts.isEmpty()) {
                 Text("暫時未有待上傳相片。", color = ComposeColor(0xff7d7169))
@@ -445,6 +514,17 @@ class MainActivity : ComponentActivity() {
                             screen = Screen.Review
                         })
                     }
+                }
+            }
+            if (pendingTrash.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Text("已上傳原相片：${pendingTrash.size} 張可移到垃圾桶。", color = ComposeColor(0xff5f6c64), style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(
+                    onClick = { requestTrashPendingSources() },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text("移到垃圾桶（系統確認）", color = ComposeColor(0xff5a4034))
                 }
             }
             Spacer(Modifier.height(10.dp))
@@ -552,6 +632,176 @@ class MainActivity : ComponentActivity() {
                             .clickable { capturePhoto() }
                     )
                     LatestThumb()
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun GalleryScreen() {
+        val listState = rememberLazyListState()
+        val scope = rememberCoroutineScope()
+        var rootHeight by remember { mutableFloatStateOf(0f) }
+        var gridRootOffset by remember { mutableStateOf(Offset.Zero) }
+        LaunchedEffect(Unit) {
+            if (galleryItems.isEmpty() && !galleryLoading) loadGalleryItems()
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(ComposeColor(0xff101411))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CameraPill("返回") { screen = Screen.Home }
+                Text(
+                    "相簿",
+                    color = ComposeColor.White,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.weight(1f),
+                    textAlign = TextAlign.Center
+                )
+                CameraPill("系統相簿") { openSystemGalleryPicker() }
+            }
+            Text(
+                if (selectedGalleryIds.isEmpty()) "按一下選取；按住後拖行可連續多選。" else "已選 ${selectedGalleryIds.size} 張",
+                color = ComposeColor(0xffd8e4dc),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .onGloballyPositioned {
+                        rootHeight = it.size.height.toFloat()
+                        gridRootOffset = it.boundsInRoot().topLeft
+                    }
+                    .pointerInput(galleryItems, selectedGalleryIds) {
+                        detectDragGestures(
+                            onDragStart = { position -> selectGalleryAt(position + gridRootOffset) },
+                            onDrag = { change, _ ->
+                                val position = change.position
+                                selectGalleryAt(position + gridRootOffset)
+                                when {
+                                    position.y < 110f -> scope.launch { listState.scrollBy(-70f) }
+                                    position.y > rootHeight - 130f -> scope.launch { listState.scrollBy(70f) }
+                                }
+                                change.consume()
+                            }
+                        )
+                    }
+            ) {
+                when {
+                    galleryLoading -> Text("正在讀取相簿...", color = ComposeColor.White, modifier = Modifier.align(Alignment.Center))
+                    galleryItems.isEmpty() -> Text("未讀到相簿圖片。", color = ComposeColor.White, modifier = Modifier.align(Alignment.Center))
+                    else -> {
+                        val columns = 3
+                        val rows = galleryItems.chunked(columns)
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            itemsIndexed(rows) { _, row ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(3.dp), modifier = Modifier.fillMaxWidth()) {
+                                    row.forEach { item ->
+                                        val order = selectedGalleryIds.indexOf(item.id).takeIf { it >= 0 }?.plus(1)
+                                        GalleryTile(
+                                            item = item,
+                                            selectedOrder = order,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .aspectRatio(1f)
+                                        )
+                                    }
+                                    repeat(columns - row.size) {
+                                        Spacer(
+                                            Modifier
+                                                .weight(1f)
+                                                .aspectRatio(1f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (galleryStatus.isNotBlank()) {
+                Text(galleryStatus, color = ComposeColor.White, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(ComposeColor(0xee000000))
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(onClick = { selectedGalleryIds = emptyList() }, enabled = selectedGalleryIds.isNotEmpty(), modifier = Modifier.weight(1f)) {
+                    Text("清除", color = ComposeColor.White)
+                }
+                Button(
+                    onClick = { importSelectedGalleryItems() },
+                    enabled = selectedGalleryIds.isNotEmpty() && !galleryImporting,
+                    modifier = Modifier.weight(2f),
+                    colors = greenButton()
+                ) {
+                    Text(if (galleryImporting) "加入中..." else "加入 ${selectedGalleryIds.size} 張")
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun GalleryTile(item: GalleryItem, selectedOrder: Int?, modifier: Modifier = Modifier) {
+        var thumb by remember(item.uri) { mutableStateOf<Bitmap?>(null) }
+        DisposableEffect(item.id) {
+            onDispose { galleryBounds.remove(item.id) }
+        }
+        LaunchedEffect(item.uri) {
+            thumb = withContext(Dispatchers.IO) { loadGalleryThumbnail(item.uri) }
+        }
+        Box(
+            modifier = modifier
+                .background(ComposeColor(0xff232822))
+                .onGloballyPositioned { galleryBounds[item.id] = it.boundsInRoot() }
+                .clickable { toggleGallerySelection(item.id) }
+        ) {
+            if (thumb != null) {
+                Image(
+                    bitmap = thumb!!.asImageBitmap(),
+                    contentDescription = item.displayName,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Text("圖片", color = ComposeColor.White, modifier = Modifier.align(Alignment.Center))
+            }
+            if (selectedOrder != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(ComposeColor(0x66000000))
+                        .border(3.dp, ComposeColor(0xff25d366))
+                )
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .background(ComposeColor(0xff25d366)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(selectedOrder.toString(), color = ComposeColor.White, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -1401,6 +1651,21 @@ class MainActivity : ComponentActivity() {
 
     private fun openGallery() {
         if (!hasRequiredSettings()) return
+        if (hasGalleryReadPermission()) {
+            showInternalGallery()
+        } else {
+            galleryPermissionLauncher.launch(galleryPermissionNames())
+        }
+    }
+
+    private fun showInternalGallery() {
+        screen = Screen.Gallery
+        selectedGalleryIds = emptyList()
+        galleryStatus = ""
+        loadGalleryItems()
+    }
+
+    private fun openSystemGalleryPicker() {
         val gallery = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             Intent(MediaStore.ACTION_PICK_IMAGES).apply {
                 type = "image/*"
@@ -1424,13 +1689,270 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun copyUriToDraft(uri: Uri) {
+    private fun hasGalleryReadPermission(): Boolean {
+        return when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
+                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+            }
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> {
+                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+            }
+            else -> {
+                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+    }
+
+    private fun galleryPermissionNames(): Array<String> {
+        return when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> arrayOf(
+                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            )
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+            else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+    }
+
+    private fun loadGalleryItems() {
+        galleryLoading = true
+        galleryStatus = ""
+        galleryBounds.clear()
+        Thread {
+            val loaded = runCatching {
+                val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                val projection = arrayOf(
+                    MediaStore.Images.Media._ID,
+                    MediaStore.Images.Media.DISPLAY_NAME,
+                    MediaStore.Images.Media.DATE_TAKEN,
+                    MediaStore.Images.Media.SIZE,
+                    MediaStore.Images.Media.MIME_TYPE
+                )
+                val sortOrder = "${MediaStore.Images.Media.DATE_TAKEN} DESC, ${MediaStore.Images.Media.DATE_ADDED} DESC"
+                contentResolver.query(collection, projection, null, null, sortOrder)?.use { cursor ->
+                    val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                    val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                    val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+                    val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+                    val mimeColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
+                    val items = mutableListOf<GalleryItem>()
+                    while (cursor.moveToNext() && items.size < 1200) {
+                        val id = cursor.getLong(idColumn)
+                        items.add(
+                            GalleryItem(
+                                id = id,
+                                uri = ContentUris.withAppendedId(collection, id),
+                                displayName = cursor.getString(nameColumn) ?: "image_$id",
+                                dateTaken = cursor.getLong(dateColumn),
+                                size = cursor.getLong(sizeColumn),
+                                mimeType = cursor.getString(mimeColumn) ?: "image/jpeg"
+                            )
+                        )
+                    }
+                    items
+                } ?: emptyList()
+            }.getOrElse { error ->
+                runOnUiThread {
+                    galleryStatus = "讀取相簿失敗：${error.message}。已改用系統相簿。"
+                    galleryLoading = false
+                    openSystemGalleryPicker()
+                }
+                return@Thread
+            }
+            runOnUiThread {
+                galleryItems = loaded
+                galleryLoading = false
+                galleryStatus = if (loaded.isEmpty()) "相簿暫時沒有可選圖片。" else "已讀取 ${loaded.size} 張圖片。"
+            }
+        }.start()
+    }
+
+    private fun toggleGallerySelection(id: Long) {
+        selectedGalleryIds = if (selectedGalleryIds.contains(id)) {
+            selectedGalleryIds.filterNot { it == id }
+        } else {
+            selectedGalleryIds + id
+        }
+    }
+
+    private fun selectGalleryAt(position: Offset) {
+        val targetId = galleryBounds.entries.firstOrNull { (_, rect) -> rect.contains(position) }?.key ?: return
+        if (!selectedGalleryIds.contains(targetId)) {
+            selectedGalleryIds = selectedGalleryIds + targetId
+        }
+    }
+
+    private fun importSelectedGalleryItems() {
+        if (galleryImporting) return
+        val selected = selectedGalleryIds.mapNotNull { id -> galleryItems.firstOrNull { it.id == id } }
+        if (selected.isEmpty()) return
+        galleryImporting = true
+        galleryStatus = "正在加入 0 / ${selected.size}..."
+        Thread {
+            var ok = 0
+            var failed = 0
+            selected.forEachIndexed { index, item ->
+                val copied = copyUriToDraft(item.uri, item)
+                if (copied) ok++ else failed++
+                runOnUiThread { galleryStatus = "正在加入 ${index + 1} / ${selected.size}..." }
+            }
+            runOnUiThread {
+                galleryImporting = false
+                selectedGalleryIds = emptyList()
+                refreshDrafts()
+                reviewIndex = drafts.lastIndex.coerceAtLeast(0)
+                screen = if (ok > 0) Screen.Review else Screen.Gallery
+                message = if (failed == 0) "已加入 $ok 張相片。" else "已加入 $ok 張相片，$failed 張讀取失敗。"
+                galleryStatus = message
+            }
+        }.start()
+    }
+
+    private fun loadGalleryThumbnail(uri: Uri): Bitmap? {
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                contentResolver.loadThumbnail(uri, AndroidSize(320, 320), null)
+            } else {
+                contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+            }
+        }.getOrNull()
+    }
+
+    private fun copyUriToDraft(uri: Uri, source: GalleryItem? = null): Boolean {
         val displayName = displayName(uri) ?: "picked_${System.currentTimeMillis()}"
         val extension = displayName.substringAfterLast('.', "bin").lowercase(Locale.ROOT)
         val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
+        val copy = copyUriToPrivateFile(uri, extension) ?: return false
+        DraftStore.add(
+            this,
+            copy.file,
+            mimeType,
+            extension,
+            selectedSiteId,
+            selectedSiteName,
+            recordDate,
+            remark,
+            sourceUri = source?.uri?.toString().orEmpty(),
+            sourceDisplayName = source?.displayName.orEmpty(),
+            sourceSize = source?.size ?: 0L,
+            sourceHash = copy.hash,
+            sourceTrashStatus = if (source != null && isMediaStoreUri(source.uri)) "eligible" else "not_applicable"
+        )
+        return true
+    }
+
+    private fun copyUriToPrivateFile(uri: Uri, extension: String): SourceCopyResult? {
         val outputFile = File(DraftStore.draftsDir(this), "${UUID.randomUUID()}.$extension")
-        contentResolver.openInputStream(uri)?.use { input -> outputFile.outputStream().use { output -> input.copyTo(output) } }
-        DraftStore.add(this, outputFile, mimeType, extension, selectedSiteId, selectedSiteName, recordDate, remark)
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        return try {
+            val input = contentResolver.openInputStream(uri) ?: return null
+            input.use { source ->
+                outputFile.outputStream().use { output ->
+                    while (true) {
+                        val read = source.read(buffer)
+                        if (read <= 0) break
+                        digest.update(buffer, 0, read)
+                        output.write(buffer, 0, read)
+                    }
+                }
+            }
+            if (!outputFile.exists() || outputFile.length() <= 0L) {
+                outputFile.delete()
+                null
+            } else {
+                SourceCopyResult(outputFile, digest.digest().joinToString("") { "%02x".format(it) })
+            }
+        } catch (_: Exception) {
+            outputFile.delete()
+            null
+        }
+    }
+
+    private fun isMediaStoreUri(uri: Uri): Boolean {
+        return uri.scheme == "content" && uri.authority == MediaStore.AUTHORITY
+    }
+
+    private fun requestTrashPendingSources() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            message = "此 Android 版本未支援安全移到垃圾桶；原相片已保留。"
+            return
+        }
+        val pending = DraftStore.pendingTrash(this)
+        if (pending.isEmpty()) {
+            message = "沒有待移到垃圾桶的原相片。"
+            return
+        }
+        message = "正在核對已上傳原相片..."
+        Thread {
+            val verified = mutableListOf<SourceTrashItem>()
+            val skipped = mutableSetOf<String>()
+            pending.forEach { item ->
+                if (verifyTrashItem(item)) {
+                    verified.add(item)
+                } else {
+                    skipped.add(item.id)
+                }
+            }
+            runOnUiThread {
+                if (skipped.isNotEmpty()) DraftStore.markTrashSkipped(this, skipped)
+                if (verified.isEmpty()) {
+                    refreshDrafts()
+                    message = "未有原相片通過安全核對，沒有移到垃圾桶。"
+                    return@runOnUiThread
+                }
+                val uris = verified.map { Uri.parse(it.sourceUri) }
+                pendingTrashRequestIds = verified.map { it.id }.toSet()
+                try {
+                    val request: PendingIntent = MediaStore.createTrashRequest(contentResolver, uris, true)
+                    trashLauncher.launch(IntentSenderRequest.Builder(request.intentSender).build())
+                } catch (error: Exception) {
+                    pendingTrashRequestIds = emptySet()
+                    refreshDrafts()
+                    message = "無法開啟垃圾桶確認：${error.message}"
+                }
+            }
+        }.start()
+    }
+
+    private fun verifyTrashItem(item: SourceTrashItem): Boolean {
+        val uri = runCatching { Uri.parse(item.sourceUri) }.getOrNull() ?: return false
+        if (!isMediaStoreUri(uri)) return false
+        if (item.sourceSize > 0L) {
+            val currentSize = queryUriSize(uri)
+            if (currentSize > 0L && currentSize != item.sourceSize) return false
+        }
+        if (item.sourceHash.isNotBlank()) {
+            val currentHash = hashUri(uri) ?: return false
+            if (!currentHash.equals(item.sourceHash, ignoreCase = true)) return false
+        }
+        return true
+    }
+
+    private fun queryUriSize(uri: Uri): Long {
+        return contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+            if (cursor.moveToFirst() && index >= 0) cursor.getLong(index) else 0L
+        } ?: 0L
+    }
+
+    private fun hashUri(uri: Uri): String? {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        return try {
+            val input = contentResolver.openInputStream(uri) ?: return null
+            input.use { source ->
+                while (true) {
+                    val read = source.read(buffer)
+                    if (read <= 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            digest.digest().joinToString("") { "%02x".format(it) }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun displayName(uri: Uri): String? {
@@ -1595,6 +2117,7 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshDrafts() {
         drafts = DraftStore.list(this)
+        trashItems = DraftStore.listTrash(this)
     }
 
     private fun hasRequiredSettings(): Boolean {

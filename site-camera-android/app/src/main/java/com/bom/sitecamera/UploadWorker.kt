@@ -73,11 +73,11 @@ class UploadWorker(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(
-                NotificationChannel(channelId, "工程相機上傳", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(channelId, "地盤記錄上傳", NotificationManager.IMPORTANCE_LOW)
             )
         }
         val notification = NotificationCompat.Builder(applicationContext, channelId)
-            .setContentTitle("工程相機上傳")
+            .setContentTitle("地盤記錄上傳")
             .setContentText("正在背景上傳檔案。")
             .setSmallIcon(android.R.drawable.stat_sys_upload)
             .setOngoing(true)

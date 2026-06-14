@@ -1,7 +1,6 @@
 package com.bom.sitecamera
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -19,6 +18,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import java.io.File
@@ -31,8 +31,10 @@ import kotlin.math.sin
 
 class EditActivity : Activity() {
     private lateinit var editor: MarkupView
+    private lateinit var bottomPanel: LinearLayout
     private lateinit var draftId: String
     private val modeButtons = mutableListOf<EditorIconButton>()
+    private var activeInput: EditText? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,14 +42,24 @@ class EditActivity : Activity() {
         val draft = DraftStore.find(this, draftId) ?: return finish()
         val bitmap = BitmapFactory.decodeFile(draft.filePath) ?: return finish()
 
-        editor = MarkupView(this, bitmap) { updateModeButtons() }
+        editor = MarkupView(
+            context = this,
+            source = bitmap,
+            onStateChanged = { updateControls() },
+            textProvider = { mode -> currentInlineText(mode) }
+        )
+        bottomPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(8), dp(10), dp(10))
+            setBackgroundColor(Color.argb(178, 0, 0, 0))
+        }
+
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         root.addView(editor, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         root.addView(topBar(), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(56), Gravity.TOP))
-        root.addView(toolRail(), FrameLayout.LayoutParams(dp(58), FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.CENTER_VERTICAL))
-        root.addView(bottomBar(), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(76), Gravity.BOTTOM))
+        root.addView(bottomPanel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
         setContentView(root)
-        updateModeButtons()
+        updateControls()
     }
 
     private fun topBar(): View {
@@ -55,7 +67,7 @@ class EditActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(10), dp(6), dp(10), dp(6))
-            setBackgroundColor(Color.argb(145, 0, 0, 0))
+            setBackgroundColor(Color.argb(155, 0, 0, 0))
             addView(editorIconButton(EditIconKind.Close) { finish() }, LinearLayout.LayoutParams(dp(48), dp(44)))
             addView(TextView(context).apply {
                 text = "編輯"
@@ -68,52 +80,119 @@ class EditActivity : Activity() {
         }
     }
 
-    private fun toolRail(): View {
-        val tools = listOf(
-            EditIconKind.Brush to EditMode.BRUSH,
-            EditIconKind.Line to EditMode.LINE,
-            EditIconKind.Arrow to EditMode.ARROW,
-            EditIconKind.Circle to EditMode.CIRCLE,
-            EditIconKind.Text to EditMode.TEXT,
-            EditIconKind.Mosaic to EditMode.MOSAIC,
-            EditIconKind.Dimension to EditMode.DIMENSION,
-            EditIconKind.Crop to EditMode.CROP
-        )
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(6), dp(8), dp(6), dp(8))
-            setBackgroundColor(Color.argb(95, 0, 0, 0))
-            tools.forEach { (icon, mode) ->
-                val button = editorIconButton(icon) {
-                    editor.mode = mode
-                    updateModeButtons()
-                }
-                button.tag = mode
-                modeButtons.add(button)
-                addView(button, LinearLayout.LayoutParams(dp(46), dp(42)))
-            }
-            addView(editorIconButton(EditIconKind.Rotate) { editor.rotate90() }, LinearLayout.LayoutParams(dp(46), dp(42)))
+    private fun updateControls() {
+        bottomPanel.removeAllViews()
+        modeButtons.clear()
+        activeInput = null
+
+        if (editor.mode == EditMode.TEXT || editor.mode == EditMode.DIMENSION) {
+            bottomPanel.addView(inlineInput(), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)))
+            bottomPanel.addView(spacer(6))
+        }
+
+        if (editor.mode == EditMode.CROP && editor.hasPendingCrop()) {
+            bottomPanel.addView(cropActionRow(), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)))
+            bottomPanel.addView(spacer(6))
+        }
+
+        if (editor.hasSelectedDimension()) {
+            bottomPanel.addView(dimensionAlignRow(), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(38)))
+            bottomPanel.addView(spacer(6))
+        }
+
+        bottomPanel.addView(colorRow(), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(38)))
+        bottomPanel.addView(spacer(8))
+        bottomPanel.addView(toolRow(), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(48)))
+        updateModeButtons()
+    }
+
+    private fun inlineInput(): EditText {
+        return EditText(this).apply {
+            activeInput = this
+            hint = if (editor.mode == EditMode.DIMENSION) "例如 850mm" else "輸入文字"
+            setSingleLine(true)
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.argb(180, 255, 255, 255))
+            setPadding(dp(14), 0, dp(14), 0)
+            setBackgroundColor(Color.argb(105, 255, 255, 255))
         }
     }
 
-    private fun bottomBar(): View {
+    private fun colorRow(): View {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(8), dp(10), dp(8))
-            setBackgroundColor(Color.argb(145, 0, 0, 0))
-            listOf(0xffff7a2a.toInt(), Color.WHITE, 0xff25d366.toInt(), 0xff4aa3ff.toInt(), 0xffff4d6d.toInt()).forEach { color ->
-                addView(colorButton(color), LinearLayout.LayoutParams(dp(42), dp(42)))
+            listOf(0xffff7a2a.toInt(), Color.WHITE, 0xff25d366.toInt(), 0xff4aa3ff.toInt(), 0xffff4d6d.toInt(), 0xffffdf45.toInt()).forEach { color ->
+                addView(colorButton(color), LinearLayout.LayoutParams(dp(34), dp(34)).apply { rightMargin = dp(8) })
             }
             addView(TextView(context).apply {
-                text = "  尺寸文字："
+                text = modeHint()
                 setTextColor(Color.WHITE)
                 textSize = 13f
-            })
-            addView(smallButton("字左") { editor.alignSelectedDimension(0.18f) })
-            addView(smallButton("字中") { editor.alignSelectedDimension(0.5f) })
-            addView(smallButton("字右") { editor.alignSelectedDimension(0.82f) })
+                gravity = Gravity.CENTER_VERTICAL
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        }
+    }
+
+    private fun toolRow(): View {
+        val tools = listOf(
+            EditIconKind.Brush to EditMode.BRUSH,
+            EditIconKind.Text to EditMode.TEXT,
+            EditIconKind.Arrow to EditMode.ARROW,
+            EditIconKind.Circle to EditMode.CIRCLE,
+            EditIconKind.Mosaic to EditMode.MOSAIC,
+            EditIconKind.Dimension to EditMode.DIMENSION,
+            EditIconKind.Crop to EditMode.CROP,
+            EditIconKind.Line to EditMode.LINE
+        )
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            tools.forEach { (icon, mode) ->
+                val button = editorIconButton(icon) {
+                    editor.mode = mode
+                    editor.cancelPendingCrop()
+                    updateControls()
+                }
+                button.tag = mode
+                modeButtons.add(button)
+                addView(button, LinearLayout.LayoutParams(dp(46), dp(46)).apply { rightMargin = dp(8) })
+            }
+            addView(editorIconButton(EditIconKind.Rotate) { editor.rotate90() }, LinearLayout.LayoutParams(dp(46), dp(46)))
+        }
+        return HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(row)
+        }
+    }
+
+    private fun cropActionRow(): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            addView(smallButton("取消裁剪") { editor.cancelPendingCrop() }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            addView(smallButton("完成裁剪") { editor.confirmCrop() }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        }
+    }
+
+    private fun dimensionAlignRow(): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            addView(smallButton("字左") { editor.alignSelectedDimension(0.18f) }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            addView(smallButton("字中") { editor.alignSelectedDimension(0.5f) }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            addView(smallButton("字右") { editor.alignSelectedDimension(0.82f) }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        }
+    }
+
+    private fun modeHint(): String {
+        return when (editor.mode) {
+            EditMode.TEXT -> "點相片放文字，可再拖動位置"
+            EditMode.DIMENSION -> "拖兩端做尺寸，文字可再拖"
+            EditMode.CROP -> if (editor.hasPendingCrop()) "確認後才裁剪" else "拖出裁剪範圍"
+            EditMode.MOSAIC -> "拖出遮蓋範圍"
+            else -> "選工具後直接在相片上畫"
         }
     }
 
@@ -142,7 +221,10 @@ class EditActivity : Activity() {
     }
 
     private fun smallButton(label: String, action: () -> Unit): Button {
-        return iconButton(label, action).apply { textSize = 12f }
+        return iconButton(label, action).apply {
+            textSize = 13f
+            setBackgroundColor(Color.argb(85, 255, 255, 255))
+        }
     }
 
     private fun colorButton(color: Int): Button {
@@ -156,10 +238,18 @@ class EditActivity : Activity() {
         }
     }
 
+    private fun spacer(height: Int): View {
+        return View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(height)) }
+    }
+
+    private fun currentInlineText(mode: EditMode): String {
+        val fallback = if (mode == EditMode.DIMENSION) "尺寸" else "文字"
+        return activeInput?.text?.toString()?.trim().orEmpty().ifBlank { fallback }
+    }
+
     private fun updateModeButtons() {
         modeButtons.forEach { button ->
-            val active = button.tag == editor.mode
-            button.active = active
+            button.active = button.tag == editor.mode
         }
     }
 
@@ -221,7 +311,6 @@ private class EditorIconButton(
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         textAlign = Paint.Align.CENTER
-        textSize = 24f
         isFakeBoldText = true
     }
 
@@ -230,7 +319,7 @@ private class EditorIconButton(
         val w = width.toFloat()
         val h = height.toFloat()
         val accent = Color.rgb(37, 211, 102)
-        fill.color = if (active) Color.argb(210, 255, 255, 255) else Color.argb(95, 0, 0, 0)
+        fill.color = if (active) Color.argb(225, 255, 255, 255) else Color.argb(100, 0, 0, 0)
         canvas.drawRoundRect(RectF(3f, 3f, w - 3f, h - 3f), 18f, 18f, fill)
         stroke.color = if (active) Color.BLACK else Color.WHITE
         textPaint.color = if (active) Color.BLACK else Color.WHITE
@@ -260,12 +349,15 @@ private class EditorIconButton(
                 canvas.drawLine(w * 0.72f, h * 0.32f, w * 0.52f, h * 0.38f, stroke)
             }
             EditIconKind.Circle -> canvas.drawOval(RectF(w * 0.25f, h * 0.24f, w * 0.75f, h * 0.76f), stroke)
-            EditIconKind.Text -> canvas.drawText("T", w * 0.50f, h * 0.62f, textPaint.apply { textSize = h * 0.46f })
+            EditIconKind.Text -> {
+                textPaint.textSize = h * 0.46f
+                canvas.drawText("T", w * 0.50f, h * 0.64f, textPaint)
+            }
             EditIconKind.Mosaic -> {
                 val size = w * 0.15f
                 for (row in 0..2) {
                     for (col in 0..2) {
-                        fill.color = if ((row + col) % 2 == 0) stroke.color else Color.argb(170, Color.red(stroke.color), Color.green(stroke.color), Color.blue(stroke.color))
+                        fill.color = if ((row + col) % 2 == 0) stroke.color else Color.argb(165, Color.red(stroke.color), Color.green(stroke.color), Color.blue(stroke.color))
                         canvas.drawRect(w * 0.31f + col * size, h * 0.30f + row * size, w * 0.31f + (col + 1) * size - 2f, h * 0.30f + (row + 1) * size - 2f, fill)
                     }
                 }
@@ -282,8 +374,9 @@ private class EditorIconButton(
                 canvas.drawLine(w * 0.66f, h * 0.34f, w * 0.66f, h * 0.80f, stroke)
             }
             EditIconKind.Rotate -> {
+                stroke.color = accent
                 val oval = RectF(w * 0.28f, h * 0.24f, w * 0.74f, h * 0.72f)
-                canvas.drawArc(oval, 35f, 285f, false, stroke.apply { color = accent })
+                canvas.drawArc(oval, 35f, 285f, false, stroke)
                 canvas.drawLine(w * 0.72f, h * 0.28f, w * 0.72f, h * 0.48f, stroke)
                 canvas.drawLine(w * 0.72f, h * 0.28f, w * 0.52f, h * 0.32f, stroke)
             }
@@ -316,12 +409,14 @@ private data class DragTarget(val index: Int, val kind: DragKind)
 class MarkupView(
     context: Activity,
     source: Bitmap,
-    private val onModeChanged: () -> Unit = {}
+    private val onStateChanged: () -> Unit = {},
+    private val textProvider: (EditMode) -> String = { if (it == EditMode.DIMENSION) "尺寸" else "文字" }
 ) : View(context) {
     var mode: EditMode = EditMode.BRUSH
     private var bitmap: Bitmap = source.copy(Bitmap.Config.ARGB_8888, true)
     private val shapes = mutableListOf<Shape>()
     private var active: Shape? = null
+    private var pendingCrop: Shape? = null
     private var dragTarget: DragTarget? = null
     private var selectedIndex: Int? = null
     private var activeScreenX = 0f
@@ -343,16 +438,35 @@ class MarkupView(
         val matrix = Matrix().apply { postRotate(90f) }
         bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
         shapes.clear()
+        pendingCrop = null
         selectedIndex = null
         invalidate()
+        onStateChanged()
     }
 
     fun undo() {
-        if (shapes.isNotEmpty()) {
-            shapes.removeAt(shapes.lastIndex)
-            selectedIndex = null
-            invalidate()
+        when {
+            pendingCrop != null -> pendingCrop = null
+            shapes.isNotEmpty() -> shapes.removeAt(shapes.lastIndex)
         }
+        selectedIndex = null
+        invalidate()
+        onStateChanged()
+    }
+
+    fun hasPendingCrop(): Boolean = pendingCrop != null
+
+    fun cancelPendingCrop() {
+        if (pendingCrop != null) {
+            pendingCrop = null
+            invalidate()
+            onStateChanged()
+        }
+    }
+
+    fun hasSelectedDimension(): Boolean {
+        val index = selectedIndex ?: return false
+        return index in shapes.indices && shapes[index].mode == EditMode.DIMENSION
     }
 
     fun alignSelectedDimension(position: Float) {
@@ -361,7 +475,13 @@ class MarkupView(
             shapes[index] = shapes[index].copy(textPosition = position, labelX = null, labelY = null)
             selectedIndex = index
             invalidate()
+            onStateChanged()
         }
+    }
+
+    fun confirmCrop() {
+        val shape = pendingCrop ?: return
+        crop(shape)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -371,8 +491,8 @@ class MarkupView(
         canvas.drawBitmap(bitmap, null, rect, null)
         canvas.save()
         canvas.clipRect(rect)
-        (shapes + listOfNotNull(active)).forEachIndexed { index, shape ->
-            drawShape(canvas, shape, rect, index == selectedIndex)
+        (shapes + listOfNotNull(pendingCrop, active)).forEachIndexed { index, shape ->
+            drawShape(canvas, shape, rect, index == selectedIndex || shape == pendingCrop)
         }
         canvas.restore()
         if (active != null || dragTarget != null) {
@@ -385,6 +505,7 @@ class MarkupView(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val rect = imageRect()
+        if (rect.width() <= 0f || rect.height() <= 0f) return true
         val imageX = ((event.x - rect.left) / rect.width()).coerceIn(0f, 1f)
         val imageY = ((event.y - rect.top) / rect.height()).coerceIn(0f, 1f)
         activeScreenX = event.x
@@ -395,6 +516,7 @@ class MarkupView(
                 if (dragTarget == null) {
                     active = Shape(mode, imageX, imageY, imageX, imageY, points = listOf(imageX, imageY), color = markupColor)
                     selectedIndex = null
+                    if (mode == EditMode.CROP) pendingCrop = null
                 }
             }
             MotionEvent.ACTION_MOVE -> {
@@ -414,6 +536,7 @@ class MarkupView(
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (dragTarget != null) {
                     dragTarget = null
+                    onStateChanged()
                 } else {
                     val finished = active?.copy(endX = imageX, endY = imageY)
                     active = null
@@ -427,54 +550,32 @@ class MarkupView(
 
     private fun handleFinished(shape: Shape) {
         if (shape.mode == EditMode.CROP) {
-            crop(shape)
-            return
-        }
-        if (shape.mode == EditMode.DIMENSION) {
-            askDimensionText(shape)
+            if (isMeaningful(shape)) {
+                pendingCrop = shape
+                onStateChanged()
+            }
             return
         }
         if (shape.mode == EditMode.TEXT) {
-            askText(shape)
+            shapes.add(shape.copy(text = textProvider(EditMode.TEXT), labelX = shape.startX, labelY = shape.startY))
+            selectedIndex = shapes.lastIndex
+            onStateChanged()
             return
         }
+        if (shape.mode != EditMode.BRUSH && !isMeaningful(shape)) return
         if (shape.mode == EditMode.BRUSH && shape.points.size < 4) return
-        shapes.add(shape)
+        val finalShape = if (shape.mode == EditMode.DIMENSION) {
+            shape.copy(text = textProvider(EditMode.DIMENSION))
+        } else {
+            shape
+        }
+        shapes.add(finalShape)
         selectedIndex = shapes.lastIndex
+        onStateChanged()
     }
 
-    private fun askDimensionText(shape: Shape) {
-        val input = EditText(context).apply {
-            hint = "例如 850mm"
-            setSingleLine(true)
-        }
-        AlertDialog.Builder(context)
-            .setTitle("尺寸標註")
-            .setView(input)
-            .setPositiveButton("加入") { _, _ ->
-                shapes.add(shape.copy(text = input.text.toString().trim().ifBlank { "尺寸" }))
-                selectedIndex = shapes.lastIndex
-                invalidate()
-            }
-            .setNegativeButton("取消", null)
-            .show()
-    }
-
-    private fun askText(shape: Shape) {
-        val input = EditText(context).apply {
-            hint = "輸入文字"
-            setSingleLine(false)
-        }
-        AlertDialog.Builder(context)
-            .setTitle("文字")
-            .setView(input)
-            .setPositiveButton("加入") { _, _ ->
-                shapes.add(shape.copy(text = input.text.toString().trim().ifBlank { "文字" }, labelX = shape.startX, labelY = shape.startY))
-                selectedIndex = shapes.lastIndex
-                invalidate()
-            }
-            .setNegativeButton("取消", null)
-            .show()
+    private fun isMeaningful(shape: Shape): Boolean {
+        return hypot((shape.endX - shape.startX).toDouble(), (shape.endY - shape.startY).toDouble()) > 0.018
     }
 
     private fun hitExisting(screenX: Float, screenY: Float, rect: RectF): DragTarget? {
@@ -487,13 +588,13 @@ class MarkupView(
             if (shape.mode == EditMode.DIMENSION) {
                 val label = dimensionLabelPoint(shape, rect)
                 if (distance(screenX, screenY, label.first, label.second) < 58f) return DragTarget(index, DragKind.Label)
-                if (distance(screenX, screenY, sx, sy) < 42f) return DragTarget(index, DragKind.Start)
-                if (distance(screenX, screenY, ex, ey) < 42f) return DragTarget(index, DragKind.End)
+                if (distance(screenX, screenY, sx, sy) < 46f) return DragTarget(index, DragKind.Start)
+                if (distance(screenX, screenY, ex, ey) < 46f) return DragTarget(index, DragKind.End)
             }
             if (shape.mode == EditMode.TEXT) {
                 val labelX = rect.left + (shape.labelX ?: shape.startX) * rect.width()
                 val labelY = rect.top + (shape.labelY ?: shape.startY) * rect.height()
-                if (distance(screenX, screenY, labelX, labelY) < 70f) return DragTarget(index, DragKind.Label)
+                if (distance(screenX, screenY, labelX, labelY) < 76f) return DragTarget(index, DragKind.Label)
             }
         }
         return null
@@ -543,7 +644,13 @@ class MarkupView(
             EditMode.ARROW -> drawArrow(canvas, sx, sy, ex, ey)
             EditMode.CIRCLE -> canvas.drawOval(RectF(min(sx, ex), min(sy, ey), max(sx, ex), max(sy, ey)), paint)
             EditMode.DIMENSION -> drawDimension(canvas, shape, rect, selected)
-            EditMode.CROP -> canvas.drawRect(RectF(min(sx, ex), min(sy, ey), max(sx, ex), max(sy, ey)), paint)
+            EditMode.CROP -> {
+                val cropPaint = Paint(paint).apply {
+                    color = Color.WHITE
+                    strokeWidth = 6f
+                }
+                canvas.drawRect(RectF(min(sx, ex), min(sy, ey), max(sx, ex), max(sy, ey)), cropPaint)
+            }
             EditMode.TEXT -> drawTextShape(canvas, shape, rect, selected)
             EditMode.MOSAIC -> {
                 val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -577,7 +684,7 @@ class MarkupView(
         val bg = RectF(labelPoint.first - textWidth / 2f - 18f, labelPoint.second - 58f, labelPoint.first + textWidth / 2f + 18f, labelPoint.second + 10f)
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
-            color = Color.argb(if (selected) 210 else 150, 0, 0, 0)
+            color = Color.argb(if (selected) 220 else 155, 0, 0, 0)
             canvas.drawRoundRect(bg, 18f, 18f, this)
         }
         canvas.drawText(label, labelPoint.first - textWidth / 2f, labelPoint.second - 14f, textPaint)
@@ -695,10 +802,11 @@ class MarkupView(
         if (cropWidth >= 80 && cropHeight >= 80 && left >= 0 && top >= 0 && right <= bitmap.width && bottom <= bitmap.height) {
             bitmap = Bitmap.createBitmap(bitmap, left, top, cropWidth, cropHeight)
             shapes.clear()
+            pendingCrop = null
             selectedIndex = null
             mode = EditMode.BRUSH
-            onModeChanged()
             invalidate()
+            onStateChanged()
         }
     }
 
